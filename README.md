@@ -48,7 +48,7 @@ OPENAI_API_KEY=... RETELL_API_KEY=... RETELL_WEBHOOK_BASE_URL=https://... \
 docker compose restart api
 ```
 
-Open http://localhost:3000. First load kicks off the onboarding wizard.
+Open http://localhost:3010. First load kicks off the onboarding wizard.
 
 ## Stack at a glance
 

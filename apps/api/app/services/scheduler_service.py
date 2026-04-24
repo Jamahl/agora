@@ -14,9 +14,7 @@ from app.services.slot_picker import next_free_slot
 
 
 def _interview_link(token: str) -> str:
-    base = get_settings().retell_webhook_base_url.replace("api", "web") if "api" in get_settings().retell_webhook_base_url else "http://localhost:3000"
-    # fallback: just use localhost:3000
-    return f"http://localhost:3000/interview/{token}"
+    return f"{get_settings().web_base_url.rstrip('/')}/interview/{token}"
 
 
 def _taken(db: Session, employee_id: int) -> list[datetime]:

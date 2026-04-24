@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     retell_api_key: str = Field(..., alias="RETELL_API_KEY")
     retell_agent_id: str = Field("", alias="RETELL_AGENT_ID")
     retell_webhook_base_url: str = Field("http://localhost:8000", alias="RETELL_WEBHOOK_BASE_URL")
+    web_base_url: str = Field("http://localhost:3010", alias="WEB_BASE_URL")
 
     composio_api_key: str = Field("", alias="COMPOSIO_API_KEY")
     loops_api_key: str = Field("", alias="LOOPS_API_KEY")
