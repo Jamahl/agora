@@ -1,0 +1,604 @@
+# Agora — Project Overview & Handover
+
+This document is the engineering handover. If you're taking over building Agora, read this before `AGORA_PRD.md`. It covers:
+
+- [What Agora is](#what-agora-is)
+- [Architecture](#architecture)
+- [Tech stack and the decisions behind it](#tech-stack-and-the-decisions-behind-it)
+- [Repository layout](#repository-layout)
+- [Data model](#data-model)
+- [HTTP route map](#http-route-map)
+- [State machines](#state-machines)
+- [The interview lifecycle, end-to-end](#the-interview-lifecycle-end-to-end)
+- [Local setup](#local-setup)
+- [Operational gotchas learned while building](#operational-gotchas-learned-while-building)
+- [Where to extend](#where-to-extend)
+- [Known gaps, risks, and next work](#known-gaps-risks-and-next-work)
+
+---
+
+## What Agora is
+
+A voice-AI company intelligence tool. An admin (CEO / department head) onboards employees and OKRs. Agora then:
+
+1. Runs autonomous voice interviews on a recurring cadence (Retell web call, GPT‑4.1 behind the scenes).
+2. Synthesises each transcript into typed **insights** (blocker / win / start_doing / stop_doing / tooling_gap / sentiment_note / other), attaches sentiment scores, and tags them to relevant OKRs via embedding similarity.
+3. Surfaces the state of the business on a dashboard: top blockers, OKR health, sentiment trends, themes (HDBSCAN clustering), employee timelines.
+4. Lets leadership chat against the memory (RAG over insights + Notion pages) and commission ad-hoc research rounds that schedule one-off interviews and produce progressive reports.
+
+Full product rationale lives in [`AGORA_PRD.md`](./AGORA_PRD.md). This document assumes you've read at least §1–§4 of that.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Admin Dashboard  (Next.js 15)                │
+│  /onboarding · /dashboard · /dashboard/<feature> · /interview/:t │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │ HTTPS/JSON  (cookie-signed admin session)
+┌───────────────────────▼─────────────────────────────────────────┐
+│                    FastAPI backend  (Python 3.12)               │
+│                                                                 │
+│  routers/   session · company · employees · okrs · interviews   │
+│             · webhooks · dashboard · chat · research ·          │
+│             integrations · review · alerts                      │
+│                                                                 │
+│  services/  synthesis  · themes (HDBSCAN) · rag ·               │
+│             research_agent · research_report ·                  │
+│             scheduler_service · slot_picker · ics_gen ·         │
+│             summary_email · email_templates · notion_sync ·     │
+│             okr_extract · embeddings · retell_service           │
+│                                                                 │
+│  clients/   openai_client · retell_client · composio_client ·   │
+│             loops_client                                        │
+│                                                                 │
+│  scheduler  APScheduler (Postgres jobstore, runs in-process)    │
+│             jobs: daily_cadence · reminder_noshow · themes      │
+└──┬──────────┬──────────┬──────────┬──────────┬──────────────────┘
+   │          │          │          │          │
+┌──▼──┐  ┌────▼────┐ ┌───▼───┐  ┌───▼────┐ ┌───▼────┐
+│ PG  │  │ Retell  │ │OpenAI │  │Composio│ │ Loops  │
+│ +pg │  │(voice+  │ │(LLM + │  │(Notion+│ │ (email │
+│vec16│  │webhook) │ │embed) │  │Gmail)  │ │fallbk) │
+└─────┘  └─────────┘ └───────┘  └────────┘ └────────┘
+```
+
+**Design shape is intentional:**
+
+- Everything on one machine, one Postgres. No separate worker/queue service. APScheduler lives inside the FastAPI process, and synthesis runs in `BackgroundTasks` off the Retell webhook.
+- The only true "agent" is the **research agent** (OpenAI Agents SDK with tools). Everything else is deterministic pipelines with structured-output LLM calls. Don't reach for LangGraph/CrewAI — it is deliberately not here.
+- pgvector stores 3072-dim embeddings. No separate vector DB.
+
+---
+
+## Tech stack and the decisions behind it
+
+| Layer | Choice | Why |
+|---|---|---|
+| Frontend | Next.js 15 App Router + TS + Tailwind + recharts | Server components for dashboard, client for chat dock + interview page. One framework, no router split. |
+| Backend | FastAPI 3.12 + SQLAlchemy 2 + Alembic | Best ergonomics for LLM pipelines, structured output, Pydantic everywhere. |
+| DB | Postgres 16 + pgvector | Structured + vector in one store. Simpler to reason about than two systems. |
+| Voice | Retell Web Call SDK, BYO OpenAI LLM | Purpose-built for browser voice, custom function calls, transcript webhooks. LLM cost stays controllable by BYO. |
+| LLM | OpenAI GPT-4.1 + `text-embedding-3-large` (3072-dim) | Quality, structured output reliability, tool calls. Swap to gpt-5/6 when they land. |
+| Scheduler | APScheduler w/ Postgres jobstore | Right-sized for 5–30 employees. Celery is negative value at this scale; migration path is ~1 day if we ever hit the ceiling. |
+| Email | Composio → Gmail (primary), Loops (fallback) | Sending from the admin's own Gmail means invites don't look like spam and `.ics` attachments work. Loops is a fallback (set `LOOPS_API_KEY` and disconnect Gmail). |
+| Calendar | `.ics` attachment | Works with every mail client. No need to create Google Calendar events directly. |
+| Integrations | Composio MCP | One integration plane for Notion today, Jira/Linear/Slack tomorrow. |
+| Tunnel | cloudflared `--protocol http2` | QUIC is blocked on many networks; HTTP/2 survives. |
+| Deployment | Local only (Docker Compose) for MVP | Pilot is internal. Hosted deploy is v1.1. |
+| Observability | stdout JSON via structlog | Ship Sentry/Sauron when we deploy. |
+| Tests | pytest (unit; slot_picker covered). Smoke is manual. | Tight surface, fast iteration. Expand before scaling. |
+
+### Rejected alternatives and why
+
+- **Supermemory** — pgvector covers 100% of MVP needs. Adopt when there's a specific affordance we need (temporal memory graphs, multi-company federation).
+- **LangGraph / CrewAI** — overkill for one agent. OpenAI Agents SDK for the research agent; plain Python pipelines elsewhere.
+- **Vapi** — Retell's browser web-call SDK is more mature for tokenised-link use case.
+- **Clerk/Auth.js** — single admin, signed cookie. Revisit at second user.
+- **Hosted deploy on Vercel/Railway/Fly** — not MVP. Move after pilot.
+
+---
+
+## Repository layout
+
+```
+apps/
+  api/                   FastAPI backend
+    app/
+      main.py            FastAPI app, CORS, router registration, startup hooks
+      config.py          pydantic-settings (reads .env)
+      db.py              SQLAlchemy engine + SessionLocal + Base
+      models.py          All ORM models
+      schemas.py         Shared Pydantic request/response types
+      security.py        Cookie signing, get_current_company dependency
+      scheduler.py       APScheduler init + job registration
+      logging_conf.py    structlog JSON setup
+      clients/
+        openai_client.py LLM + embeddings + structured output
+        retell_client.py Retell SDK wrapper
+        composio_client.py Notion list/fetch + Gmail send
+        loops_client.py  Fallback transactional email
+      routers/
+        session.py       /admin/session/*
+        company.py       /admin/company/*  (+ email templates)
+        employees.py     /employees/*      (CRUD, CSV import, pending-interviews, schedule-next, start-test-interview)
+        okrs.py          /okrs/*           (CRUD + extract)
+        interviews.py    /interviews/*     (public token + admin + send-invite/summary)
+        webhooks.py      /webhooks/retell  (+ /functions/:name custom tool calls)
+        dashboard.py     /dashboard/*      (home modules, dept/okr/employee/theme queries)
+        chat.py          /chat             (Mode A RAG)
+        research.py      /research/*       (draft, edit plan, approve/reject)
+        integrations.py  /integrations/{notion,gmail}/*
+        review.py        /review/*         (flagged insights approve/suppress)
+        alerts.py        /alerts/*         (admin alerts)
+      services/
+        synthesis.py     Full pipeline: clean → extract → embed → OKR-tag → sentiment → memory → summary email
+        themes.py        HDBSCAN nightly cluster + label
+        rag.py           pgvector cosine over insights + notion_page
+        research_agent.py  LLM plans which employees to interview
+        research_report.py Progressive report update + notify
+        scheduler_service.py  Slot + invite + reminder + no-show + admin notif
+        slot_picker.py   Pure function: next free 20-min slot in window
+        ics_gen.py       RFC 5545 .ics + base64
+        email_templates.py  Defaults + {{var}} render + merge with company overrides
+        summary_email.py Post-call recap to employee (2-5 bullets + next steps)
+        notion_sync.py   Composio → list → pick → chunk → embed → store
+        okr_extract.py   Paste-and-parse OKR doc → structured schema
+        retell_service.py  Build dynamic vars + create_web_call
+        embeddings.py    Helpers for OKR/insight/notion embed
+    migrations/          Alembic — 0001 initial, 0002 gmail+notion cols, 0003 email templates + send-stamps
+    tests/               slot_picker unit tests
+  web/                   Next.js 15 + TS + Tailwind
+    app/
+      page.tsx           Boot; redirect to onboarding or dashboard
+      layout.tsx         Root HTML + globals.css
+      onboarding/page.tsx  6-step wizard
+      dashboard/
+        layout.tsx       Sidebar + ChatDock wrapper
+        page.tsx         Home: hero + 4 modules (blockers, OKR health, sentiment, themes)
+        employees/{page,[id]}.tsx
+        departments/{page,[name]}.tsx
+        okrs/{page,[id]}.tsx
+        themes/{page,[id]}.tsx
+        interviews/[id]/page.tsx   Transcript + insights + sentiment
+        research/{page,[id]}.tsx   Plan approval + progressive report
+        review/page.tsx            Flagged-insight queue
+        alerts/page.tsx            All alerts tabs
+        settings/page.tsx          Profile + cadence + integrations + email templates
+      interview/[token]/page.tsx   Public employee-facing call start
+    components/
+      Sidebar.tsx  ChatDock.tsx  AlertsBanner.tsx  Logo.tsx  CallView.tsx
+      modules/     HeroStrip · TopBlockers · OkrHealth · SentimentTrend · EmergingThemes
+    lib/api.ts    Fetch helper (prepends /api on client, cookie-credential)
+packages/
+  prompts/
+    interview-agent.md  Retell system prompt (source of truth for voice behaviour)
+    synthesis.md        Mirror of extraction/sentiment/memory prompts (reference)
+    retell.md composio.md loops.md  Third-party SDK cheatsheets used during build
+scripts/
+  provision_retell_agent.py  One-off: uploads prompt, creates LLM + agent
+  tunnel.sh                  cloudflared/ngrok helper
+  seed_demo.py               Insert a demo company + 3 employees + 1 OKR
+  recover_interview.py       Pull call from Retell API + rerun synthesis (missed-webhook recovery)
+docker-compose.yml .env.example .gitignore .dockerignore README.md
+AGORA_PRD.md AGORA_TASKS.md PROJECT_OVERVIEW.md
+```
+
+---
+
+## Data model
+
+Postgres 16 with `vector` extension. Embeddings are 3072-dim (`text-embedding-3-large`). No ivfflat/hnsw indexes — at 3072 dims neither index type covers it, so cosine distance runs sequential scan. This is fine for MVP scale (<10k insight rows); when scaling, either switch to 1536-dim with `dimensions` param on the embed call, or run vector DB alongside.
+
+```
+company
+  id  name  industry  description
+  cadence_days  timezone  window_start_hour  window_end_hour  weekdays[]
+  hr_contact  admin_email
+  composio_connection_id (legacy, for old rows)
+  gmail_connection_id    notion_connection_id
+  okr_tag_threshold  email_templates(jsonb)
+  onboarding_completed_at  created_at
+
+admin_session
+  id  company_id(fk)  cookie_token(unique)  created_at  last_seen_at
+
+employee
+  id  company_id(fk)  name  email  job_title  department  linkedin_url
+  manager_id(self-fk, nullable, cannot equal own id)
+  memory_summary(text)  status(active|archived)  created_at
+  UNIQUE(company_id, email)
+
+okr
+  id  company_id(fk)  objective  status  embedding(vector(3072))  created_at
+key_result
+  id  okr_id(fk)  description  target_metric  current_value  status  embedding(vector(3072))
+
+interview
+  id  employee_id(fk)  company_id(fk)  scheduled_at  started_at  ended_at
+  status(scheduled|in_progress|completed|no_show)
+  link_token(unique)  retell_call_id(indexed)
+  transcript_url  recording_url
+  raw_transcript_json(jsonb)  cleaned_transcript_json(jsonb)  corrected_summary
+  sensitive_omitted(text[])
+  research_request_id(fk, nullable)
+  reminder_sent_at  invite_sent_at  summary_sent_at  created_at
+
+insight
+  id  interview_id(fk)  employee_id(fk)  company_id(fk)
+  type CHECK IN (blocker|win|start_doing|stop_doing|tooling_gap|sentiment_note|other)
+  content  direct_quote  severity(1-5)  confidence(0-1)
+  review_state CHECK IN (live|needs_review|suppressed|omitted)
+  embedding(vector(3072))  created_at
+
+insight_okr_tag
+  insight_id  okr_id  similarity   PRIMARY KEY(insight_id, okr_id)
+
+interview_sentiment
+  interview_id(pk, fk)  morale  energy  candor  urgency  notes
+  (all scores 1-5 integers)
+
+theme
+  id  company_id(fk)  label  summary  member_insight_ids(int[])  created_at
+
+admin_alert
+  id  company_id(fk)  category  summary  interview_id(fk, nullable)
+  status(unread|acknowledged)  created_at  acknowledged_at
+
+notion_page
+  id  company_id(fk)  notion_page_id  chunk_index  title  content
+  embedding(vector(3072))  created_at
+  UNIQUE(company_id, notion_page_id, chunk_index)
+
+chat_message
+  id  company_id(fk)  scope_type  scope_id  role(user|assistant|system)
+  content  citations_json(jsonb)  created_at
+
+research_request
+  id  company_id(fk)  question  status(draft|approved|running|complete|rejected)
+  plan_json(jsonb)  report_json(jsonb)
+  notify_threshold(default 0.75)  notified_at
+  created_at  approved_at
+```
+
+### Relationships at a glance
+
+- `company` is the single-tenant root — every table cascades from it.
+- `employee.manager_id` is a self-fk; circular/self constraints enforced by CHECK.
+- `interview ← insight` via `interview_id`. `insight ↔ okr` many-to-many via `insight_okr_tag`.
+- `research_request ← interview` via `interview.research_request_id`, optional. Progressive report is rebuilt on each research-linked synthesis completion.
+- `admin_alert.interview_id` is optional (most alerts come from hard-escalation triggers during a call).
+
+---
+
+## HTTP route map
+
+Grouped by concern. All admin routes require a valid signed `agora_admin` cookie. Public routes are explicitly marked.
+
+**Session / bootstrap**
+- `GET /admin/session/me` — has_session, onboarding_complete, company_id, company_name
+- `POST /admin/session/bootstrap` — creates company + session cookie (first visit)
+
+**Company**
+- `GET /admin/company` · `PATCH /admin/company`
+- `PATCH /admin/company/cadence`
+- `POST /admin/company/complete-onboarding` — marks wizard done, kicks off first cadence scan
+- `GET /admin/company/email-templates`
+- `PATCH /admin/company/email-templates` — body `{templates:{kind:{subject,body_html}}}`
+- `POST /admin/company/email-templates/{kind}/reset` — drop override, fall back to default
+
+**Employees**
+- `GET /employees?status_filter=active|archived|all`
+- `POST /employees` — 409 w/ structured body `{code:"email_archived", employee_id, name}` if archived collision
+- `PATCH /employees/{id}`
+- `POST /employees/{id}/archive` · `POST /employees/{id}/restore`
+- `POST /employees/import-csv` (multipart) — columns name,email,job_title,department,linkedin_url,manager_email
+- `GET /employees/{id}/pending-interviews` — rows with invite_sent_at + research_label
+- `POST /employees/{id}/schedule-next` — slot-picker + invite
+- `POST /employees/{id}/start-test-interview` — scheduled_at=now, no email, for self-testing
+
+**OKRs**
+- `GET /okrs` · `POST /okrs` · `PATCH /okrs/{id}` · `POST /okrs/{id}/archive`
+- `POST /okrs/extract` — paste-and-parse text into structured OKRs
+
+**Interviews**
+- `GET /interviews/by-token/{token}` — **public**, returns greeting metadata. 404/410/425 for unknown/expired/too-early
+- `POST /interviews/by-token/{token}/start` — **public**, creates Retell web call, returns access_token + call_id
+- `GET /interviews?employee_id=&status=&limit=`
+- `GET /interviews/{id}` — transcript + insights + sentiment
+- `POST /interviews/{id}/send-invite` — send/resend invite for that specific interview, stamps `invite_sent_at`
+- `POST /interviews/{id}/send-summary` — re-send post-call summary
+
+**Retell webhooks**
+- `POST /webhooks/retell` — lifecycle events (call_started, call_ended, call_analyzed). Signature verified when `VERIFY_RETELL_WEBHOOK=true`; off by default in dev
+- `POST /webhooks/retell/functions/{name}` — custom tool calls: `mark_sensitive_omit`, `mark_sensitive_flag_for_review`, `trigger_admin_alert`, `correct_summary`, `end_call`
+
+**Dashboard queries**
+- `GET /dashboard/home/summary` — last 7d counts
+- `GET /dashboard/home/blockers?department=&limit=`
+- `GET /dashboard/home/okr-health`
+- `GET /dashboard/home/sentiment-trend?days=&department=`
+- `GET /dashboard/departments` · `GET /dashboard/departments/{name}`
+- `GET /dashboard/okrs/{id}` · `GET /dashboard/okrs/{id}/summary` (AI, 1h cache)
+- `GET /dashboard/employees/{id}` — timeline + memory summary + top_insights (incl. review_state)
+- `GET /dashboard/themes` · `GET /dashboard/themes/{id}`
+
+**Chat**
+- `GET /chat/history?scope_type=&scope_id=&limit=`
+- `POST /chat` — body `{message, scope_type?, scope_id?}` → `{reply, citations, needs_research, proposed_research_request_id?}`
+
+**Research**
+- `GET /research` · `POST /research` · `GET /research/{id}`
+- `PATCH /research/{id}/plan` — edit employees + eta_days while `status=draft`
+- `POST /research/{id}/approve` — status→approved, schedules interviews, sends invites
+- `POST /research/{id}/reject`
+
+**Review queue**
+- `GET /review` — `needs_review` insights
+- `POST /review/{id}/approve` — → live + embed
+- `POST /review/{id}/suppress` — → suppressed
+
+**Alerts**
+- `GET /alerts?status=unread|acknowledged`
+- `POST /alerts/{id}/acknowledge`
+
+**Integrations (Composio)**
+- `GET /integrations/notion/status` · `POST /integrations/notion/connect` · `POST /integrations/notion/disconnect`
+- `GET /integrations/notion/pages` · `POST /integrations/notion/sync` body `{page_ids:[str]}`
+- `GET /integrations/gmail/status` · `POST /integrations/gmail/connect` · `POST /integrations/gmail/disconnect`
+
+**Misc**
+- `GET /health` — `{status:ok}`
+- `GET /docs` · `GET /redoc` · `GET /openapi.json` — FastAPI auto
+
+---
+
+## State machines
+
+### `interview.status`
+
+```
+           schedule_for_employee()
+ (none) ─────────────────────────▶ scheduled
+   ▲                                  │  reminder_job fires 15 min out
+   │                                  │  employee opens link + Start
+   │                                  ▼
+   │                              in_progress
+   │                                  │
+   │                                  │ Retell call_ended webhook
+   │                                  │  (or recover_interview.py)
+   │                                  ▼
+   │                              completed ──▶ synthesis runs
+   │                                  │       (insights, sentiment,
+   │                                  │        memory, summary email,
+   │                                  │        research report if linked)
+   │                                  │
+   └── no_show ◀──── 30 min past scheduled_at, still scheduled
+           (new scheduled row auto-created; admin alerted after 2 consecutive)
+```
+
+### `insight.review_state`
+
+```
+extraction ──▶ live                    (default for non-sensitive)
+            ▶ needs_review             (set by `mark_sensitive_flag_for_review` function call)
+            ▶ omitted                  (sensitive-omit span; no insight ever created — `interview.sensitive_omitted[]`)
+
+needs_review ──▶ live         (admin clicks Approve in /dashboard/review)
+             ──▶ suppressed   (admin clicks Suppress)
+
+Only `live` insights appear in dashboards, chat RAG, top blockers, OKR signal.
+`needs_review` are rendered with urgent styling on the employee + interview detail pages.
+```
+
+### `research_request.status`
+
+```
+ ┌─ draft ──(PATCH plan)──▶ draft
+ │   │
+ │   │ approve  ─▶ approved ──▶ (scheduler writes N interviews) ──▶
+ │   │                            each completion rebuilds report_json
+ │   │                            at ≥ notify_threshold → admin email + notified_at
+ │   │                            when completed == total → complete
+ │   │
+ │   └ reject   ─▶ rejected
+ ▼
+(stays approved while interviews in flight — `running` state is in the PRD
+ but MVP uses approved until complete; left room to split later.)
+```
+
+### Cadence scheduling
+
+```
+daily_cadence_job  (APScheduler, 03:00 UTC)
+  for each company with onboarding_completed_at:
+    for each active employee:
+      if needs_schedule(cadence_days since last ended_at):
+        pick slot via slot_picker.next_free_slot(
+          tz, weekdays, window, taken_times)
+        create interview row, send invite
+
+reminder_and_noshow_job  (every 5 min)
+  for each scheduled interview with scheduled_at <= now+15m and reminder not yet sent:
+    send reminder; stamp reminder_sent_at
+  for each scheduled interview with scheduled_at < now-30m:
+    mark no_show; auto-schedule replacement (which re-invites)
+    if 2 consecutive no_shows → email admin
+
+theme_cluster_job  (02:00 UTC)
+  for each company, HDBSCAN over last-30d insight embeddings (min_cluster=3)
+  label each cluster via GPT-4.1
+  upsert theme rows, replace today's set
+```
+
+---
+
+## The interview lifecycle, end-to-end
+
+This is the single most important path. If you break it, the product doesn't exist.
+
+1. **Schedule** — `schedule_for_employee()` picks a slot, writes `interview(status=scheduled, link_token=<urlsafe 32 bytes>)`, and calls `send_invite()`.
+
+2. **Invite sent** — `send_invite()` builds the `.ics`, renders the `invite` email template, and posts via `_send_email()`:
+   1. If `company.gmail_connection_id` is set, try Composio `GMAIL_SEND_EMAIL`.
+   2. On Gmail error (or not connected), try Loops transactional.
+   3. If neither is wired, log `{skipped: true}` — no crash.
+   Then stamps `invite_sent_at`.
+
+3. **Reminder** — `reminder_and_noshow_job` (every 5 min) picks up anything scheduled within next 15 min with no `reminder_sent_at`, sends via the same email pipeline, stamps.
+
+4. **Employee joins** — visits `/interview/[token]`. Frontend calls `GET /interviews/by-token/:t` to render the greeting, then `POST /interviews/by-token/:t/start` which:
+   - Builds dynamic variables (employee first name, company description, active OKRs, memory summary, research context if any)
+   - Calls Retell `call.create_web_call(agent_id, retell_llm_dynamic_variables=…)`
+   - Returns `access_token` + `call_id` to the browser
+   - Frontend passes `access_token` to `retell-client-js-sdk`'s `RetellWebClient.startCall()`
+
+5. **During the call** — Retell handles STT → LLM → TTS. The LLM (GPT-4.1) follows `packages/prompts/interview-agent.md`. Four custom function calls are available and POST to `/webhooks/retell/functions/{name}`:
+   - `mark_sensitive_omit(label)` → appends to `interview.sensitive_omitted[]`
+   - `mark_sensitive_flag_for_review(paraphrase)` → inserts an `Insight` with `review_state=needs_review`
+   - `trigger_admin_alert(category, summary)` → inserts `admin_alert` (unread banner on dashboard)
+   - `correct_summary(updated_summary)` → stored on interview
+   - `end_call` → no-op server-side (Retell handles termination)
+
+6. **Call ends** — Retell posts `call_ended` to `/webhooks/retell`. The handler:
+   - Verifies signature if `VERIFY_RETELL_WEBHOOK=true`
+   - Stamps `ended_at`, `status=completed`, stores `raw_transcript_json` + URLs
+   - Enqueues synthesis via FastAPI `BackgroundTasks`
+
+7. **Synthesis** (async, ~10–20 s):
+   1. **Cleanup** — build `cleaned_transcript_json` with speaker/ts/text per segment
+   2. **Extract** — GPT-4.1 structured output → list of typed insights (respects sensitive-omitted spans)
+   3. **Embed** — `text-embedding-3-large` in one batch call
+   4. **OKR-tag** — cosine similarity of insight embedding vs OKR embeddings, top-3 above `okr_tag_threshold` (default 0.55) → `insight_okr_tag` rows
+   5. **Sentiment** — GPT-4.1 structured output → `InterviewSentiment` row (morale/energy/candor/urgency + notes)
+   6. **Memory rollup** — GPT-4.1 generates a 2nd-person briefing from this + last two interviews → stored on `employee.memory_summary` (used in next interview's dynamic vars)
+   7. **Research report** — if `research_request_id` is set, `rebuild_report()` regenerates `report_json` and fires admin notif at threshold
+   8. **Post-call summary email** — LLM generates 3–5 bullets + 1–3 next steps (sensitive items get explicit handling in the prompt), email to employee, stamp `summary_sent_at`
+
+8. **Dashboard** — everything above surfaces immediately in `/dashboard` home modules, employee timeline, OKR detail, etc.
+
+9. **Nightly** — `theme_cluster_job` re-runs HDBSCAN across last 30d of `live` insights, replaces the day's `theme` rows.
+
+### The sensitive content path deserves its own note
+
+The Retell prompt defines **three routing outcomes** for sensitive content — the LLM makes the call, not our parser:
+
+- `mark_sensitive_omit(label)` — employee opted out. Nothing insight-level is ever written. The label goes on `interview.sensitive_omitted[]` purely for the extractor's negative prompt ("don't turn this topic into an insight"). Synthesis sees the topic name, skips it.
+- `mark_sensitive_flag_for_review(paraphrase)` — employee opted in. An `Insight` is created with `review_state=needs_review`. It is **invisible** to dashboards and chat RAG until an admin clicks Approve in `/dashboard/review`. The UI renders these with a red left-border, tinted background, bold text on the interview detail + employee pages.
+- `trigger_admin_alert(category, summary)` — hard escalation (harassment / discrimination / self_harm / misconduct). Fires *regardless* of the employee's record/omit choice. Creates an `admin_alert` → red banner on dashboard, email to admin.
+
+If you change any of the above, the interview-agent prompt in `packages/prompts/interview-agent.md` needs to match — it's the other half of this contract.
+
+---
+
+## Local setup
+
+```bash
+# 1. Get API keys and put them in .env
+cp .env.example .env
+# fill OPENAI_API_KEY, RETELL_API_KEY, COMPOSIO_API_KEY
+# leave LOOPS_API_KEY blank unless you want it as fallback
+
+# 2. Boot the stack (pgvector + FastAPI + Next.js)
+docker compose up -d --build
+
+# 3. Open a tunnel so Retell can post webhooks to localhost
+brew install cloudflared
+cloudflared tunnel --url http://localhost:8010 --protocol http2
+# copy the trycloudflare.com URL → RETELL_WEBHOOK_BASE_URL in .env
+
+# 4. Provision the Retell agent (one-off, or any time the prompt changes)
+docker compose cp scripts/provision_retell_agent.py api:/tmp/provision.py
+docker compose cp packages/prompts api:/prompts_copy
+docker compose exec api bash -c '
+  cp /prompts_copy/interview-agent.md /tmp/interview-agent.md && \
+  python -c "
+import pathlib, re
+p=pathlib.Path(\"/tmp/provision.py\")
+p.write_text(p.read_text().replace(
+  \"ROOT / \\\"packages/prompts/interview-agent.md\\\"\",
+  \"pathlib.Path(\\\"/tmp/interview-agent.md\\\")\"))
+"
+  RETELL_WEBHOOK_BASE_URL=... python /tmp/provision.py
+'
+# copy AGENT_ID → .env
+
+# 5. IMPORTANT: recreate (not restart) to pick up new env
+docker compose up -d --force-recreate api
+
+# 6. Open the app
+open http://localhost:3010
+```
+
+Env-file changes are only picked up on container *create*. `docker compose restart` reuses the existing container and silently ignores new env values — which has burned us twice. Always use `up -d --force-recreate api`.
+
+To connect Gmail + Notion: Settings → Integrations → Connect → consent → Sync pages.
+
+---
+
+## Operational gotchas learned while building
+
+1. **`docker compose restart` does not re-read `.env`.** Use `up -d --force-recreate <service>`.
+2. **Cloudflare quick tunnels default to QUIC (UDP 443).** Many networks block it — output hangs with `failed to dial to edge with quic`. Add `--protocol http2`.
+3. **Composio v1 requires an explicit toolkit version** for manual `tools.execute()`. `"latest"` is rejected. Client resolves latest per-toolkit at init time and passes via `toolkit_versions={...}`. If Composio bumps a tool breaking-ly, the ingest may change shape — the Notion list/fetch code has defensive unwrapping helpers (`_extract_page_items`, `_page_title`) for that reason.
+4. **Retell webhook signature verify is finicky** — the bundled HMAC check was rejecting legitimate Retell payloads on 4.x of the SDK. `VERIFY_RETELL_WEBHOOK=false` is the MVP posture; re-enable in production once a diagnostic pass confirms body encoding. Missed webhooks can be recovered via `scripts/recover_interview.py <interview_id>` — pulls the call from Retell API and runs synthesis.
+5. **pgvector's ivfflat/hnsw index cap is 2000 dims.** We use 3072-dim (`text-embedding-3-large`) for quality. Cosine searches are sequential-scan, which is fine below ~10k rows. Beyond that: drop to 1536 via `dimensions` param, or switch to a vector DB.
+6. **OpenAI `responses.parse` vs `beta.chat.completions.parse`** — we use `responses.parse` which returns `output_parsed`. If the SDK renames or deprecates, swap in `beta.chat.completions.parse` — same structured-output ergonomics.
+7. **APScheduler + psycopg3** — `SQLAlchemyJobStore` expects the full SQLA URL including `+psycopg`. An earlier version of scheduler.py stripped the driver suffix and pulled in psycopg2 as a fallback — removed, keep the URL intact.
+8. **Next.js 15 + react 18.3** — the stack is fine. We pinned `retell-client-js-sdk@2.0.7` (2.0.8 doesn't exist on npm).
+9. **Email HTML attachments** — Gmail via Composio currently accepts a single attachment via the `attachment` arg; we pass the `.ics` there. Multi-attach needs a wrapper.
+
+---
+
+## Where to extend
+
+A few concrete entry points keyed to the most likely additions.
+
+### Adding a new insight type
+1. Add the string to the CHECK constraint in an Alembic migration + to `CK_insight_type`.
+2. Add it to the `InsightType` literal in `schemas.py`.
+3. Extend the `EXTRACT_SYSTEM` prompt in `services/synthesis.py` to describe the new type.
+4. UI: add a badge colour in `insightBadgeClass()` in each page that renders insights (search for `insightBadgeClass`).
+
+### Adding an integration (Jira, Linear, Slack)
+1. Add `<slug>_connection_id` column on company (migration).
+2. `clients/composio_client.py` — add `initiate_<slug>_connection()` + action wrappers.
+3. `routers/integrations.py` — add `/integrations/<slug>/{status,connect,disconnect}`.
+4. Settings UI: add a card matching the `GmailCard` / Notion card pattern.
+5. If it's a context source (like Notion), add a sync service under `services/` that chunks + embeds into a new table and teach `services/rag.py` to join it.
+
+### Adding a new email
+1. Add a key to `DEFAULTS` in `services/email_templates.py` with subject + body_html.
+2. Add the kind to the UI label map in `app/dashboard/settings/page.tsx` `TEMPLATE_LABELS`.
+3. Wherever you send it, `_send_email(company=..., subject=render(tpl['subject'], vars), ...)` — see `send_invite` in scheduler_service for the pattern.
+
+### Changing the interview agent behaviour
+Edit `packages/prompts/interview-agent.md`, then **re-run** `scripts/provision_retell_agent.py` (or update the LLM via Retell SDK). This is the source of truth; the code just loads the file.
+
+### Adding auth / multi-admin
+Today `admin_session` is single-admin by cookie. Replace `get_current_company` dependency in `security.py` with a real user→session mapping, add `user_id` FK on `admin_session`. Start with one user row for the existing cookie to keep compatibility.
+
+### Multi-tenant (multi-company)
+The DB is already company-scoped — every table carries `company_id`. The session layer assumes one company; replace `get_current_company` to resolve from the cookie→user→company chain.
+
+---
+
+## Known gaps, risks, and next work
+
+These aren't bugs — they're conscious omissions or things we punted on.
+
+- **Retell webhook signature verification is disabled by default** (`VERIFY_RETELL_WEBHOOK=false`). Acceptable for local pilot over a cloudflared tunnel where only Retell knows the URL. Must be flipped on before any hosted deploy.
+- **HDBSCAN theme clustering needs ≥5 insights in a 30-day window** to produce anything. First two weeks of a pilot won't have themes. UI shows a friendly empty state.
+- **Research request `status` skips the `running` state** the PRD defines — we use `approved` throughout the run and go straight to `complete` when all interviews land. Add `running` if admins need a distinction between "approved, nothing yet" and "in flight".
+- **No idempotency keys on email sends.** Rate a re-queued send → possible duplicate. Add if scale bites.
+- **Notion indexing is all-or-nothing** — reselecting pages deletes and re-syncs. Add diff-based sync if page counts grow.
+- **Voice (ElevenLabs) needs pilot tuning.** Currently `11labs-Adrian` — a placeholder. Swap per §voice-choice in the interview-agent prompt's maintainer notes.
+- **No rate limiting on public `/interview/by-token/*` endpoints.** Tokens are long + scoped + expire, so risk is low, but add a reasonable per-IP limit before going public.
+- **pytest coverage is skeletal** — only `slot_picker` has unit tests. Synthesis should have fixture-based tests once prompt behaviour is stable.
+- **No structured error tracking.** stdout JSON + `docker compose logs` for now. Plug Sentry on hosted deploy.
+
+---
+
+*Last updated: 2026-04-24. Owner: Jamahl McMurran (BetterLabs). If something drifts from the code, the code wins — update this file in the same PR.*
