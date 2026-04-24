@@ -3,7 +3,7 @@
 # Uses cloudflared if available, else falls back to ngrok.
 set -euo pipefail
 
-PORT=${PORT:-8000}
+PORT=${PORT:-8010}
 
 if command -v cloudflared >/dev/null 2>&1; then
   echo "Starting cloudflared tunnel → http://localhost:${PORT}"

@@ -14,7 +14,7 @@ def get_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is None:
         s = get_settings()
-        jobstore = SQLAlchemyJobStore(url=s.database_url.replace("+psycopg", ""))
+        jobstore = SQLAlchemyJobStore(url=s.database_url)
         _scheduler = BackgroundScheduler(jobstores={"default": jobstore}, timezone="UTC")
     return _scheduler
 
