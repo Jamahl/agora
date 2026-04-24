@@ -3,11 +3,29 @@ from typing import Any, Optional
 from app.config import get_settings
 
 
+def _resolve_versions(c: Any, toolkits: list[str]) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for slug in toolkits:
+        try:
+            tk = c.toolkits.get(slug)
+            meta = getattr(tk, "meta", None)
+            v = getattr(meta, "version", None) if meta else None
+            if v:
+                versions[slug] = v
+        except Exception:
+            pass
+    return versions
+
+
 @lru_cache
 def client() -> Any:
     from composio import Composio
 
-    return Composio(api_key=_clean_key(get_settings().composio_api_key))
+    api_key = _clean_key(get_settings().composio_api_key)
+    # bootstrap a throwaway client to resolve latest toolkit versions
+    bootstrap = Composio(api_key=api_key, toolkit_versions={})
+    versions = _resolve_versions(bootstrap, ["notion", "gmail"])
+    return Composio(api_key=api_key, toolkit_versions=versions or {})
 
 
 def _clean_key(k: str) -> str:
@@ -53,34 +71,102 @@ def check_connection(user_id: str, toolkit: str) -> bool:
     return False
 
 
+def _extract_page_items(data: Any) -> list[dict]:
+    """Unwrap Composio's NOTION_FETCH_DATA payload shape."""
+    if not isinstance(data, dict):
+        return []
+    for key in ("results", "pages", "page_details", "items", "data"):
+        val = data.get(key)
+        if isinstance(val, list):
+            return val
+    nested = data.get("results_data") or data.get("response_data")
+    if isinstance(nested, dict):
+        return _extract_page_items(nested)
+    return []
+
+
+def _page_title(p: dict) -> str:
+    for k in ("title", "name", "plain_text"):
+        v = p.get(k)
+        if isinstance(v, str) and v:
+            return v
+    props = p.get("properties") or {}
+    if isinstance(props, dict):
+        for prop in props.values():
+            if isinstance(prop, dict) and prop.get("type") == "title":
+                title_arr = prop.get("title") or []
+                if title_arr and isinstance(title_arr, list):
+                    return "".join(t.get("plain_text", "") for t in title_arr if isinstance(t, dict))
+    return p.get("id") or ""
+
+
+def _page_id(p: dict) -> str:
+    for k in ("id", "page_id", "notion_id"):
+        v = p.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
 def list_notion_pages(user_id: str) -> list[dict]:
     c = client()
     try:
         result = c.tools.execute(
-            "NOTION_SEARCH_NOTION_PAGE",
+            "NOTION_FETCH_DATA",
             user_id=user_id,
-            arguments={"query": ""},
+            arguments={"fetch_type": "pages", "page_size": 100},
         )
-        data = result.get("data", {}) if isinstance(result, dict) else {}
-        return data.get("results", data.get("pages", [])) or []
-    except Exception:
-        return []
+    except Exception as e:
+        return [{"error": str(e)}]
+    if not isinstance(result, dict) or not result.get("successful", result.get("successfull", True)):
+        err = result.get("error") if isinstance(result, dict) else str(result)
+        return [{"error": err or "unknown"}]
+    raw = _extract_page_items(result.get("data") or result)
+    cleaned: list[dict] = []
+    for p in raw:
+        if not isinstance(p, dict):
+            continue
+        pid = _page_id(p)
+        if not pid:
+            continue
+        cleaned.append(
+            {
+                "id": pid,
+                "title": _page_title(p) or "(untitled)",
+                "last_edited_time": p.get("last_edited_time"),
+                "parent_title": (p.get("parent") or {}).get("page_title")
+                if isinstance(p.get("parent"), dict)
+                else None,
+            }
+        )
+    return cleaned
 
 
 def fetch_notion_page_content(user_id: str, page_id: str) -> str:
     c = client()
     try:
         result = c.tools.execute(
-            "NOTION_FETCH_DATA",
+            "NOTION_GET_PAGE_MARKDOWN",
             user_id=user_id,
             arguments={"page_id": page_id},
         )
-        data = result.get("data") if isinstance(result, dict) else None
-        if isinstance(data, dict):
-            return str(data.get("content") or data.get("plain_text") or "")
-        return str(data or "")
     except Exception:
         return ""
+    if not isinstance(result, dict):
+        return ""
+    data = result.get("data") or result
+    if isinstance(data, dict):
+        for key in ("markdown", "content", "plain_text", "text"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val
+        nested = data.get("response_data") or data.get("data")
+        if isinstance(nested, dict):
+            for key in ("markdown", "content", "plain_text", "text"):
+                val = nested.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val
+    return ""
 
 
 def send_gmail(
