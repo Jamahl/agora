@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Logo } from "@/components/Logo";
@@ -130,21 +130,45 @@ function StepCompany({ next }: { next: () => void }) {
 
 function StepEmployees({ next }: { next: () => void }) {
   const [rows, setRows] = useState<any[]>([]);
-  const [form, setForm] = useState({ name: "", email: "", job_title: "", department: "" });
+  const emptyForm = { name: "", email: "", job_title: "", department: "" };
+  const [form, setForm] = useState(emptyForm);
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const load = async () => setRows(await api("/employees"));
   useEffect(() => {
     load();
   }, []);
+
+  const canAdd = form.name.trim() && form.email.trim();
+
   const add = async () => {
-    if (!form.name || !form.email) return;
-    await api("/employees", { method: "POST", body: JSON.stringify(form) });
-    setForm({ name: "", email: "", job_title: "", department: "" });
-    load();
+    if (!canAdd) return;
+    setErr(null);
+    setSaving(true);
+    try {
+      await api("/employees", { method: "POST", body: JSON.stringify(form) });
+      setForm(emptyForm);
+      load();
+    } catch (e: any) {
+      const msg = e?.message || "Failed to add employee.";
+      try {
+        const firstColon = msg.indexOf(":");
+        const payload = firstColon >= 0 ? msg.slice(firstColon + 1).trim() : msg;
+        const parsed = JSON.parse(payload);
+        setErr(parsed?.message || msg);
+      } catch {
+        setErr(msg);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
+
   const archive = async (id: number) => {
     await api(`/employees/${id}/archive`, { method: "POST" });
     load();
   };
+
   const importCsv = async (f: File) => {
     const fd = new FormData();
     fd.append("file", f);
@@ -152,10 +176,18 @@ function StepEmployees({ next }: { next: () => void }) {
     alert(`Created ${r.created}. Errors: ${r.errors.length}`);
     load();
   };
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && canAdd && !saving) {
+      e.preventDefault();
+      add();
+    }
+  };
+
   return (
     <div className="card">
       <h2 className="text-xl font-semibold">Employees</h2>
-      <p className="mt-1 text-sm text-ink-500">Add your team. CSV or manual.</p>
+      <p className="mt-1 text-sm text-ink-500">Add your team. CSV or manual. Add as many as you want, then click Continue at the bottom.</p>
 
       <div className="mt-4">
         <label className="btn-secondary cursor-pointer">
@@ -170,43 +202,58 @@ function StepEmployees({ next }: { next: () => void }) {
         <span className="ml-3 text-xs text-ink-500">Columns: name, email, job_title, department, linkedin_url, manager_email</span>
       </div>
 
-      <div className="mt-4 grid grid-cols-4 gap-2">
-        <input className="input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <input className="input" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-        <input className="input" placeholder="Role" value={form.job_title} onChange={(e) => setForm({ ...form, job_title: e.target.value })} />
-        <input className="input" placeholder="Department" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} />
+      <div className="mt-6 rounded-lg border border-surface-200 bg-surface-50 p-4">
+        <div className="text-sm font-medium text-ink-700">Add an employee</div>
+        <div className="mt-3 grid grid-cols-4 gap-2" onKeyDown={onKey}>
+          <input className="input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input className="input" placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <input className="input" placeholder="Role" value={form.job_title} onChange={(e) => setForm({ ...form, job_title: e.target.value })} />
+          <input className="input" placeholder="Department" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} />
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <button className="btn-primary" onClick={add} disabled={!canAdd || saving}>
+            {saving ? "Adding…" : "+ Add employee"}
+          </button>
+          {err && <div className="text-sm text-danger-500">{err}</div>}
+          <div className="ml-auto text-xs text-ink-500">Tip: press Enter to add, then keep going.</div>
+        </div>
       </div>
-      <button className="btn-secondary mt-2" onClick={add}>Add</button>
 
       {rows.length > 0 && (
-        <table className="mt-6 w-full text-sm">
-          <thead className="text-ink-500">
-            <tr>
-              <th className="text-left font-medium py-2">Name</th>
-              <th className="text-left font-medium">Email</th>
-              <th className="text-left font-medium">Role</th>
-              <th className="text-left font-medium">Dept</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-surface-100">
-                <td className="py-2">{r.name}</td>
-                <td>{r.email}</td>
-                <td>{r.job_title}</td>
-                <td>{r.department}</td>
-                <td className="text-right">
-                  <button className="btn-ghost" onClick={() => archive(r.id)}>Archive</button>
-                </td>
+        <div className="mt-6">
+          <div className="text-sm text-ink-500 mb-2">Added ({rows.length})</div>
+          <table className="w-full text-sm">
+            <thead className="text-ink-500">
+              <tr>
+                <th className="text-left font-medium py-2">Name</th>
+                <th className="text-left font-medium">Email</th>
+                <th className="text-left font-medium">Role</th>
+                <th className="text-left font-medium">Dept</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t border-surface-100">
+                  <td className="py-2">{r.name}</td>
+                  <td>{r.email}</td>
+                  <td>{r.job_title}</td>
+                  <td>{r.department}</td>
+                  <td className="text-right">
+                    <button className="btn-ghost" onClick={() => archive(r.id)}>Remove</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
-      <div className="mt-6 flex justify-end">
-        <button className="btn-primary" disabled={rows.length === 0} onClick={next}>Continue ({rows.length})</button>
+      <div className="mt-8 flex items-center justify-between border-t border-surface-200 pt-4">
+        <div className="text-sm text-ink-500">
+          {rows.length === 0 ? "Add at least one employee to continue." : `${rows.length} employee${rows.length === 1 ? "" : "s"} ready.`}
+        </div>
+        <button className="btn-primary" disabled={rows.length === 0} onClick={next}>Continue to OKRs →</button>
       </div>
     </div>
   );

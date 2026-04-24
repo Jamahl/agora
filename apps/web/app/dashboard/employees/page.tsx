@@ -201,6 +201,18 @@ function EmployeeModal({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [archivedMatch, setArchivedMatch] = useState<{ id: number; name: string; email: string } | null>(null);
+
+  const parseConflict = (msg: string): { code?: string; employee_id?: number; name?: string; email?: string } | null => {
+    const firstColon = msg.indexOf(":");
+    const payload = firstColon >= 0 ? msg.slice(firstColon + 1).trim() : msg;
+    try {
+      const parsed = JSON.parse(payload.startsWith("{") ? payload : payload.replace(/^'|'$/g, ""));
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
 
   const save = async () => {
     if (!form.name.trim() || !form.email.trim()) {
@@ -209,6 +221,7 @@ function EmployeeModal({
     }
     setSaving(true);
     setError(null);
+    setArchivedMatch(null);
     try {
       if (employee) {
         await api(`/employees/${employee.id}`, {
@@ -223,7 +236,33 @@ function EmployeeModal({
       }
       onSaved();
     } catch (e: any) {
-      setError(e.message || "Failed to save.");
+      const msg = e?.message || "Failed to save.";
+      const parsed = parseConflict(msg);
+      if (parsed?.code === "email_archived" && parsed.employee_id) {
+        setArchivedMatch({ id: parsed.employee_id, name: parsed.name || form.name, email: form.email });
+        setError(null);
+      } else if (parsed?.message) {
+        setError(parsed.message);
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const restoreExisting = async () => {
+    if (!archivedMatch) return;
+    setSaving(true);
+    try {
+      await api(`/employees/${archivedMatch.id}/restore`, { method: "POST" });
+      await api(`/employees/${archivedMatch.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(form),
+      });
+      onSaved();
+    } catch (e: any) {
+      setError(e?.message || "Failed to restore.");
     } finally {
       setSaving(false);
     }
@@ -269,12 +308,30 @@ function EmployeeModal({
             />
           </div>
           {error && <div className="text-sm text-danger-500">{error}</div>}
+          {archivedMatch && (
+            <div className="rounded-md border border-warn-500/40 bg-warn-500/10 p-3 text-sm">
+              <div className="font-medium text-ink-900">
+                {archivedMatch.name} ({archivedMatch.email}) is archived.
+              </div>
+              <div className="mt-1 text-ink-500">
+                Restore them to use this email again — your changes above will be applied.
+              </div>
+              <div className="mt-2 flex gap-2">
+                <button className="btn-primary" onClick={restoreExisting} disabled={saving}>
+                  {saving ? "Restoring…" : "Restore & update"}
+                </button>
+                <button className="btn-ghost" onClick={() => setArchivedMatch(null)} disabled={saving}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         <div className="mt-6 flex justify-end gap-2">
           <button className="btn-ghost" onClick={onClose} disabled={saving}>
             Cancel
           </button>
-          <button className="btn-primary" onClick={save} disabled={saving}>
+          <button className="btn-primary" onClick={save} disabled={saving || archivedMatch !== null}>
             {saving ? "Saving…" : "Save"}
           </button>
         </div>

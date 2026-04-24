@@ -36,6 +36,30 @@ def create_employee(
     company: Company = Depends(get_current_company),
     db: Session = Depends(get_db),
 ) -> Employee:
+    existing = db.execute(
+        select(Employee).where(
+            Employee.company_id == company.id, Employee.email == body.email
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.status == "archived":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {
+                    "code": "email_archived",
+                    "message": f"{body.email} is archived. Restore instead?",
+                    "employee_id": existing.id,
+                    "name": existing.name,
+                },
+            )
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "email_exists",
+                "message": f"{body.email} is already in use by {existing.name}.",
+                "employee_id": existing.id,
+            },
+        )
     emp = Employee(
         company_id=company.id,
         name=body.name,
