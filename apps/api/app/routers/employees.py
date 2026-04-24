@@ -134,6 +134,36 @@ def restore_employee(
     return emp
 
 
+@router.post("/{employee_id}/start-test-interview")
+def start_test_interview(
+    employee_id: int,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Dev helper: create an interview scheduled for 'now' so the link opens immediately.
+    Skips the .ics + email flow."""
+    import secrets
+    from datetime import datetime, timezone
+
+    from app.models import Interview
+
+    emp = db.get(Employee, employee_id)
+    if not emp or emp.company_id != company.id:
+        raise HTTPException(404, "Not found")
+    token = secrets.token_urlsafe(32)
+    iv = Interview(
+        employee_id=emp.id,
+        company_id=company.id,
+        scheduled_at=datetime.now(timezone.utc),
+        status="scheduled",
+        link_token=token,
+    )
+    db.add(iv)
+    db.commit()
+    db.refresh(iv)
+    return {"interview_id": iv.id, "link_token": token, "link": f"/interview/{token}"}
+
+
 @router.post("/import-csv")
 async def import_csv(
     file: UploadFile = File(...),

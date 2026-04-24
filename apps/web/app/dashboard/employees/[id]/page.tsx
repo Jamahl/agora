@@ -150,9 +150,12 @@ export default function EmployeeDetailPage() {
             <span>{data.email}</span>
           </div>
         </div>
-        <span className={`badge ${data.status === "active" ? "bg-ok-500/15 text-ok-500" : "bg-surface-100 text-ink-500"}`}>
-          {data.status}
-        </span>
+        <div className="flex items-center gap-3">
+          <TestInterviewButton employeeId={data.id} />
+          <span className={`badge ${data.status === "active" ? "bg-ok-500/15 text-ok-500" : "bg-surface-100 text-ink-500"}`}>
+            {data.status}
+          </span>
+        </div>
       </div>
 
       {data.memory_summary && (
@@ -217,5 +220,28 @@ export default function EmployeeDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function TestInterviewButton({ employeeId }: { employeeId: number }) {
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ link: string; link_token: string }>(
+        `/employees/${employeeId}/start-test-interview`,
+        { method: "POST" }
+      );
+      window.open(r.link, "_blank", "noopener,noreferrer");
+    } catch (e: any) {
+      alert(e?.message || "Failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn-primary" disabled={busy} onClick={start}>
+      {busy ? "Starting…" : "Start test interview"}
+    </button>
   );
 }
