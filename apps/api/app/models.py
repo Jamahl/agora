@@ -37,6 +37,8 @@ class Company(Base):
     weekdays: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=lambda: [0, 1, 2, 3, 4])
     hr_contact: Mapped[Optional[str]] = mapped_column(String(200))
     composio_connection_id: Mapped[Optional[str]] = mapped_column(String(200))
+    gmail_connection_id: Mapped[Optional[str]] = mapped_column(String(200))
+    notion_connection_id: Mapped[Optional[str]] = mapped_column(String(200))
     admin_email: Mapped[Optional[str]] = mapped_column(String(200))
     okr_tag_threshold: Mapped[float] = mapped_column(Float, default=0.55)
     onboarding_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

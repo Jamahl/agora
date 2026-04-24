@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.loops_client import send_transactional
 from app.clients.openai_client import structured
+from app.services.scheduler_service import _send_email
 from app.models import Company, Employee, Insight, Interview, ResearchRequest
 from pydantic import BaseModel
 
@@ -86,10 +86,17 @@ def rebuild_report(db: Session, research_request_id: int) -> None:
     ):
         company = db.get(Company, rr.company_id)
         if company and company.admin_email:
-            send_transactional(
-                email=company.admin_email,
-                transactional_id="agora_research_ready",
-                data_variables={
+            _send_email(
+                company=company,
+                to=company.admin_email,
+                subject=f"Research report ready — {rr.question[:60]}",
+                body_html=(
+                    f"<p>Your research on <strong>{rr.question}</strong> is "
+                    f"{rr.report_json['progress']} complete and ready to read.</p>"
+                    f"<p>Open the report in the dashboard.</p>"
+                ),
+                loops_fallback_id="agora_research_ready",
+                loops_vars={
                     "question": rr.question,
                     "research_id": str(rr.id),
                     "progress": rr.report_json["progress"],

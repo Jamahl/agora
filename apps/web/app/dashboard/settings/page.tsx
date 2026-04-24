@@ -15,7 +15,8 @@ type Company = {
   weekdays?: number[];
 };
 
-type NotionStatus = { connected: boolean; page_count?: number };
+type NotionStatus = { connected: boolean; active?: boolean; page_count?: number };
+type GmailStatus = { connected: boolean; active?: boolean; admin_email?: string | null };
 type NotionPage = Record<string, any>;
 
 export default function SettingsPage() {
@@ -455,8 +456,10 @@ function IntegrationsSection() {
     <div className="card">
       <h2 className="text-lg font-semibold">Integrations</h2>
       <p className="mt-1 text-sm text-ink-500">
-        Connect a source of context so interviews can reference the right pages.
+        Connect your Gmail so Agora sends invites from your admin email. Connect Notion so interviews and chat can reference company context.
       </p>
+
+      <GmailCard />
 
       <div className="mt-4 rounded-md border border-surface-200 p-4">
         <div className="flex items-center justify-between">
@@ -558,6 +561,106 @@ function IntegrationsSection() {
         {message && <div className="mt-3 text-sm text-ok-500">{message}</div>}
         {error && <div className="mt-3 text-sm text-danger-500">{error}</div>}
       </div>
+    </div>
+  );
+}
+
+function GmailCard() {
+  const [status, setStatus] = useState<GmailStatus | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const loadStatus = async () => {
+    try {
+      const s = await api<GmailStatus>("/integrations/gmail/status");
+      setStatus(s);
+      return s;
+    } catch (e: any) {
+      setError(e.message || "Failed to load Gmail status");
+      setStatus({ connected: false });
+      return { connected: false };
+    }
+  };
+
+  useEffect(() => {
+    loadStatus();
+  }, []);
+
+  const connect = async () => {
+    setConnecting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const r = await api<{ redirect_url?: string; connection_id?: string; error?: string }>(
+        "/integrations/gmail/connect",
+        { method: "POST" }
+      );
+      if (r.error) {
+        setError(r.error);
+        return;
+      }
+      if (r.redirect_url) {
+        window.open(r.redirect_url, "_blank", "noopener,noreferrer");
+        setMessage("Opened Google in a new tab. Refresh after connecting.");
+      } else {
+        await loadStatus();
+        setMessage("Connected.");
+      }
+    } catch (e: any) {
+      setError(e.message || "Connect failed");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!confirm("Disconnect Gmail? Invites will fall back to Loops/skip.")) return;
+    setDisconnecting(true);
+    try {
+      await api("/integrations/gmail/disconnect", { method: "POST" });
+      setMessage("Disconnected.");
+      await loadStatus();
+    } catch (e: any) {
+      setError(e.message || "Disconnect failed");
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-md border border-surface-200 p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-medium">Gmail</div>
+          <div className="mt-1 text-xs text-ink-500">
+            {status === null
+              ? "Checking…"
+              : status.connected
+              ? `Connected${status.admin_email ? ` as ${status.admin_email}` : ""}${
+                  status.active === false ? " (inactive — re-authorize)" : ""
+                }`
+              : "Not connected. Invites fall back to Loops if you've set LOOPS_API_KEY, otherwise they're skipped."}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {status?.connected ? (
+            <>
+              <button className="btn-secondary" onClick={loadStatus}>Refresh</button>
+              <button className="btn-ghost text-danger-500" disabled={disconnecting} onClick={disconnect}>
+                {disconnecting ? "Disconnecting…" : "Disconnect"}
+              </button>
+            </>
+          ) : (
+            <button className="btn-primary" disabled={connecting} onClick={connect}>
+              {connecting ? "Connecting…" : "Connect Gmail"}
+            </button>
+          )}
+        </div>
+      </div>
+      {message && <div className="mt-3 text-sm text-ink-500">{message}</div>}
+      {error && <div className="mt-3 text-sm text-danger-500">{error}</div>}
     </div>
   );
 }
