@@ -8,9 +8,11 @@ import { api } from "@/lib/api";
 type InsightType = "blocker" | "win" | "start_doing" | "stop_doing" | "tooling_gap" | "sentiment_note" | string;
 
 type TopInsight = {
+  id?: number;
   type: InsightType;
   content: string;
   severity: number;
+  review_state?: string;
 };
 
 type Sentiment = {
@@ -162,6 +164,8 @@ export default function EmployeeDetailPage() {
         <p className="mt-6 italic text-ink-500">{data.memory_summary}</p>
       )}
 
+      <PendingInvites employeeId={data.id} employeeName={data.name} />
+
       <h2 className="mt-8 text-lg font-medium">Interview history</h2>
       {sortedInterviews.length === 0 ? (
         <div className="card mt-3 text-sm text-ink-500">
@@ -202,21 +206,162 @@ export default function EmployeeDetailPage() {
 
               {iv.top_insights.length > 0 && (
                 <ul className="mt-4 space-y-2">
-                  {iv.top_insights.map((ins, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm">
-                      <span className={`badge ${insightBadgeClass(ins.type)} shrink-0`}>
-                        {formatInsightType(ins.type)}
-                      </span>
-                      <span className="text-ink-700">{ins.content}</span>
-                      <span className={`ml-auto text-xs ${severityClass(ins.severity)} shrink-0`}>
-                        sev {ins.severity}
-                      </span>
-                    </li>
-                  ))}
+                  {iv.top_insights.map((ins, i) => {
+                    const sensitive = ins.review_state === "needs_review";
+                    return (
+                      <li
+                        key={i}
+                        className={
+                          sensitive
+                            ? "flex items-start gap-2 rounded-md border-l-4 border-danger-500 bg-danger-500/5 px-3 py-2 text-sm font-semibold"
+                            : "flex items-start gap-2 text-sm"
+                        }
+                      >
+                        <span
+                          className={`badge ${
+                            sensitive
+                              ? "bg-danger-500 text-white"
+                              : insightBadgeClass(ins.type)
+                          } shrink-0`}
+                        >
+                          {sensitive ? "sensitive · review" : formatInsightType(ins.type)}
+                        </span>
+                        <span className={sensitive ? "text-ink-900" : "text-ink-700"}>
+                          {ins.content}
+                        </span>
+                        <span className={`ml-auto text-xs ${severityClass(ins.severity)} shrink-0`}>
+                          sev {ins.severity}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type PendingInterview = {
+  id: number;
+  scheduled_at: string;
+  status: string;
+  link_token: string;
+  research_label: string | null;
+  invite_sent_at: string | null;
+  reminder_sent_at: string | null;
+};
+
+function PendingInvites({ employeeId, employeeName }: { employeeId: number; employeeName: string }) {
+  const [rows, setRows] = useState<PendingInterview[] | null>(null);
+  const [busy, setBusy] = useState<number | "schedule" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const r = await api<PendingInterview[]>(`/employees/${employeeId}/pending-interviews`);
+      setRows(r);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load pending invites");
+    }
+  };
+  useEffect(() => {
+    load();
+  }, [employeeId]);
+
+  const scheduleNew = async () => {
+    setBusy("schedule");
+    setError(null);
+    try {
+      await api(`/employees/${employeeId}/schedule-next`, { method: "POST" });
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Failed to schedule");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const sendInvite = async (id: number) => {
+    setBusy(id);
+    setError(null);
+    try {
+      await api(`/interviews/${id}/send-invite`, { method: "POST" });
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Failed to send");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-medium">Pending interviews</h2>
+        <button
+          className="btn-secondary"
+          onClick={scheduleNew}
+          disabled={busy === "schedule"}
+        >
+          {busy === "schedule" ? "Scheduling…" : "Schedule & invite"}
+        </button>
+      </div>
+      {error && <div className="mt-2 text-sm text-danger-500">{error}</div>}
+      {rows === null ? (
+        <div className="mt-3 text-sm text-ink-300">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="card mt-3 text-sm text-ink-500">
+          No pending interviews. Click "Schedule & invite" to queue {employeeName.split(" ")[0]} up.
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {rows.map((iv) => {
+            const invited = !!iv.invite_sent_at;
+            return (
+              <div
+                key={iv.id}
+                className="flex items-start justify-between gap-3 rounded-lg border border-surface-200 bg-white px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    {safeFormatDate(iv.scheduled_at, "—")}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
+                    {iv.research_label ? (
+                      <span className="badge bg-accent-400/10 text-accent-500">
+                        research · {iv.research_label}
+                      </span>
+                    ) : (
+                      <span className="badge bg-surface-100 text-ink-500">cadence</span>
+                    )}
+                    <span className={`badge ${iv.status === "no_show" ? "bg-danger-500/10 text-danger-500" : "bg-surface-100 text-ink-500"}`}>
+                      {iv.status}
+                    </span>
+                    {invited ? (
+                      <span className="badge bg-ok-500/15 text-ok-500">
+                        invite sent {safeFormatDate(iv.invite_sent_at)}
+                      </span>
+                    ) : (
+                      <span className="badge bg-warn-500/15 text-warn-500">not sent</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    className={invited ? "btn-ghost" : "btn-primary"}
+                    onClick={() => sendInvite(iv.id)}
+                    disabled={busy === iv.id}
+                  >
+                    {busy === iv.id ? "Sending…" : invited ? "Resend" : "Send invite"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

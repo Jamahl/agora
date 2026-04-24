@@ -215,24 +215,48 @@ export default function InterviewDetailPage() {
         ) : (
           <div className="card mt-3">
             <ul className="space-y-3">
-              {interview.insights.map((ins) => (
-                <li key={ins.id} className="border-b border-surface-100 pb-3 last:border-0 last:pb-0">
-                  <div className="flex items-start gap-2">
-                    <span className={`badge ${insightBadgeClass(ins.type)} shrink-0`}>
-                      {formatInsightType(ins.type)}
-                    </span>
-                    <p className="text-sm text-ink-700">{ins.content}</p>
-                    <span className={`ml-auto text-xs ${severityClass(ins.severity)} shrink-0`}>
-                      sev {ins.severity}
-                    </span>
-                  </div>
-                  {ins.direct_quote && (
-                    <blockquote className="mt-2 border-l-2 border-surface-200 pl-3 text-xs italic text-ink-500">
-                      "{ins.direct_quote}"
-                    </blockquote>
-                  )}
-                </li>
-              ))}
+              {interview.insights.map((ins) => {
+                const sensitive = ins.review_state === "needs_review";
+                return (
+                  <li
+                    key={ins.id}
+                    className={
+                      sensitive
+                        ? "-mx-4 rounded-md border-l-4 border-danger-500 bg-danger-500/5 px-4 py-3"
+                        : "border-b border-surface-100 pb-3 last:border-0 last:pb-0"
+                    }
+                  >
+                    <div className="flex items-start gap-2">
+                      <span
+                        className={`badge shrink-0 ${
+                          sensitive
+                            ? "bg-danger-500 text-white"
+                            : insightBadgeClass(ins.type)
+                        }`}
+                      >
+                        {sensitive ? "sensitive · pending review" : formatInsightType(ins.type)}
+                      </span>
+                      <p className={sensitive ? "text-sm font-semibold text-ink-900" : "text-sm text-ink-700"}>
+                        {ins.content}
+                      </p>
+                      <span className={`ml-auto text-xs shrink-0 ${severityClass(ins.severity)}`}>
+                        sev {ins.severity}
+                      </span>
+                    </div>
+                    {ins.direct_quote && (
+                      <blockquote className="mt-2 border-l-2 border-surface-200 pl-3 text-xs italic text-ink-500">
+                        "{ins.direct_quote}"
+                      </blockquote>
+                    )}
+                    {sensitive && (
+                      <div className="mt-2 text-xs text-danger-500">
+                        This item was flagged during the interview. It will not appear in dashboards
+                        until you approve it in the Review queue.
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

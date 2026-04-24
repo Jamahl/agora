@@ -259,6 +259,14 @@ def run_synthesis(db: Session, interview_id: int) -> None:
 
         rebuild_report(db, iv.research_request_id)
 
+    # Post-call summary email to the employee
+    try:
+        from app.services.summary_email import send_post_call_summary
+
+        send_post_call_summary(db, iv.id)
+    except Exception as e:
+        log.warning("summary_email_failed", err=str(e), interview_id=iv.id)
+
 
 def _cos(a: list[float], b: list[float]) -> float:
     import math

@@ -10,6 +10,7 @@ from app.clients.loops_client import send_transactional
 from app.config import get_settings
 from app.logging_conf import log
 from app.models import Company, Employee, Interview
+from app.services.email_templates import get_template, render
 from app.services.ics_gen import build_ics
 from app.services.slot_picker import next_free_slot
 
@@ -128,41 +129,39 @@ def schedule_for_employee(
     return iv
 
 
-def _invite_html(company: Company, emp: Employee, iv: Interview, link: str) -> tuple[str, str]:
-    first = (emp.name or "").split(" ")[0] or "there"
-    subject = f"Quick check-in with Agora — {iv.scheduled_at.strftime('%a %b %d, %H:%M')}"
-    body = f"""
-    <div style="font-family:Inter,Arial,sans-serif;max-width:560px;color:#0B0D10;">
-      <p>Hi {first},</p>
-      <p>This is a 10–15 minute voice chat with Agora, the AI colleague at {company.name}.
-      It helps leadership understand what's actually working and what's getting in the way.</p>
-      <p><strong>When:</strong> {iv.scheduled_at.strftime('%A %b %d, %Y at %H:%M %Z')}</p>
-      <p><a href="{link}" style="display:inline-block;padding:10px 16px;background:#0B0D10;color:#fff;text-decoration:none;border-radius:6px;">Join the interview</a></p>
-      <p style="color:#44505C;font-size:13px;">The .ics attachment adds it to your calendar.</p>
-    </div>
-    """.strip()
-    return subject, body
+def _base_vars(company: Company, emp: Employee, iv: Interview, link: str) -> dict:
+    return {
+        "employee_first_name": (emp.name or "").split(" ")[0] or "there",
+        "employee_name": emp.name or "",
+        "company_name": company.name,
+        "interview_link": link,
+        "scheduled_at_short": iv.scheduled_at.strftime("%a %b %d, %H:%M"),
+        "scheduled_at_long": iv.scheduled_at.strftime("%A %b %d, %Y at %H:%M %Z"),
+    }
 
 
-def send_invite(db: Session, company: Company, emp: Employee, iv: Interview) -> None:
+def send_invite(db: Session, company: Company, emp: Employee, iv: Interview) -> dict:
     link = _interview_link(iv.link_token)
     _ics_text, ics_b64 = build_ics(company, emp, iv, link)
-    subject, body_html = _invite_html(company, emp, iv, link)
+    tpl = get_template(company.email_templates, "invite")
+    vars_ = _base_vars(company, emp, iv, link)
+    subject = render(tpl["subject"], vars_)
+    body_html = render(tpl["body_html"], vars_)
     result = _send_email(
         company=company,
         to=emp.email,
         subject=subject,
         body_html=body_html,
         loops_fallback_id="agora_interview_invite",
-        loops_vars={
-            "employee_first_name": (emp.name or "").split(" ")[0],
-            "company_name": company.name,
-            "scheduled_at": iv.scheduled_at.isoformat(),
-            "interview_link": link,
-        },
+        loops_vars=vars_,
         ics_b64=ics_b64,
     )
+    from datetime import datetime, timezone
+
+    iv.invite_sent_at = datetime.now(timezone.utc)
+    db.commit()
     log.info("invite_sent", interview_id=iv.id, result=result)
+    return result
 
 
 def run_cadence_now(db: Session, company: Company) -> int:
@@ -205,18 +204,15 @@ def reminder_and_noshow_job() -> None:
             emp = db.get(Employee, iv.employee_id)
             company = db.get(Company, iv.company_id)
             link = _interview_link(iv.link_token)
-            first = (emp.name or "").split(" ")[0] or "there"
+            tpl = get_template(company.email_templates, "reminder")
+            vars_ = _base_vars(company, emp, iv, link)
             _send_email(
                 company=company,
                 to=emp.email,
-                subject="Reminder — Agora interview in 15 min",
-                body_html=f'<p>Hi {first}, your Agora check-in starts in about 15 minutes.</p><p><a href="{link}">Join</a></p>',
+                subject=render(tpl["subject"], vars_),
+                body_html=render(tpl["body_html"], vars_),
                 loops_fallback_id="agora_interview_reminder",
-                loops_vars={
-                    "employee_first_name": first,
-                    "interview_link": link,
-                    "scheduled_at": iv.scheduled_at.isoformat(),
-                },
+                loops_vars=vars_,
             )
             iv.reminder_sent_at = now
         db.commit()
@@ -245,15 +241,14 @@ def reminder_and_noshow_job() -> None:
                 ).scalars()
             )
             if len([r for r in recent if r.status == "no_show"]) >= 2 and company.admin_email:
+                tpl = get_template(company.email_templates, "noshow_admin")
+                nvars = {"employee_name": emp.name or "", "company_name": company.name}
                 _send_email(
                     company=company,
                     to=company.admin_email,
-                    subject=f"{emp.name} missed two interviews",
-                    body_html=f"<p>{emp.name} has missed two consecutive interviews. Consider reaching out directly.</p>",
+                    subject=render(tpl["subject"], nvars),
+                    body_html=render(tpl["body_html"], nvars),
                     loops_fallback_id="agora_admin_noshow",
-                    loops_vars={
-                        "employee_name": emp.name,
-                        "company_name": company.name,
-                    },
+                    loops_vars=nvars,
                 )
         db.commit()

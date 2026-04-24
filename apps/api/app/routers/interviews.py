@@ -92,6 +92,44 @@ def list_interviews(
     return list(db.execute(q).scalars())
 
 
+@router.post("/interviews/{interview_id}/send-invite")
+def send_invite_now(
+    interview_id: int,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.scheduler_service import send_invite
+
+    iv = db.get(Interview, interview_id)
+    if not iv or iv.company_id != company.id:
+        raise HTTPException(404)
+    emp = db.get(Employee, iv.employee_id)
+    if not emp:
+        raise HTTPException(404)
+    result = send_invite(db, company, emp, iv)
+    db.refresh(iv)
+    return {"ok": True, "invite_sent_at": iv.invite_sent_at, "delivery": result}
+
+
+@router.post("/interviews/{interview_id}/send-summary")
+def send_summary_now(
+    interview_id: int,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.summary_email import send_post_call_summary
+
+    iv = db.get(Interview, interview_id)
+    if not iv or iv.company_id != company.id:
+        raise HTTPException(404)
+    # force re-send even if already sent
+    iv.summary_sent_at = None
+    db.commit()
+    result = send_post_call_summary(db, iv.id)
+    db.refresh(iv)
+    return {"ok": True, "summary_sent_at": iv.summary_sent_at, "delivery": result}
+
+
 @router.get("/interviews/{interview_id}", response_model=dict)
 def interview_detail(
     interview_id: int,

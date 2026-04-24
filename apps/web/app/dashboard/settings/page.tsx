@@ -31,6 +31,160 @@ export default function SettingsPage() {
       <ProfileSection />
       <CadenceSection />
       <IntegrationsSection />
+      <EmailTemplatesSection />
+    </div>
+  );
+}
+
+const TEMPLATE_LABELS: Record<string, string> = {
+  invite: "Interview invite",
+  reminder: "15-min reminder",
+  summary: "Post-call summary (to employee)",
+  noshow_admin: "No-show admin notification",
+  research_ready: "Research report ready",
+};
+
+type TemplateBundleOut = {
+  templates: Record<string, { subject: string; body_html: string }>;
+  defaults: Record<string, { subject: string; body_html: string }>;
+  variables: Record<string, string[]>;
+};
+
+function EmailTemplatesSection() {
+  const [data, setData] = useState<TemplateBundleOut | null>(null);
+  const [editing, setEditing] = useState<Record<string, { subject: string; body_html: string }>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const r = await api<TemplateBundleOut>("/admin/company/email-templates");
+      setData(r);
+      setEditing(r.templates);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load templates");
+    }
+  };
+  useEffect(() => {
+    load();
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await api("/admin/company/email-templates", {
+        method: "PATCH",
+        body: JSON.stringify({ templates: editing }),
+      });
+      setMessage("Saved.");
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = async (kind: string) => {
+    if (!confirm(`Reset the ${TEMPLATE_LABELS[kind] || kind} template to default?`)) return;
+    try {
+      await api(`/admin/company/email-templates/${kind}/reset`, { method: "POST" });
+      await load();
+      setMessage("Reset.");
+    } catch (e: any) {
+      setError(e?.message || "Reset failed");
+    }
+  };
+
+  if (!data) {
+    return (
+      <div className="card">
+        <h2 className="text-lg font-semibold">Email templates</h2>
+        <div className="mt-3 text-sm text-ink-500">Loading…</div>
+      </div>
+    );
+  }
+
+  const kinds = Object.keys(data.templates);
+  return (
+    <div className="card">
+      <h2 className="text-lg font-semibold">Email templates</h2>
+      <p className="mt-1 text-sm text-ink-500">
+        Edit what Agora sends. Use <code className="rounded bg-surface-100 px-1">{"{{variable}}"}</code> tokens — the list next to each template shows what's available.
+      </p>
+
+      <div className="mt-4 space-y-6">
+        {kinds.map((kind) => {
+          const current = editing[kind] || data.templates[kind];
+          const vars = data.variables[kind] || [];
+          const isDirty =
+            current.subject !== data.templates[kind].subject ||
+            current.body_html !== data.templates[kind].body_html;
+          return (
+            <div key={kind} className="rounded-lg border border-surface-200 p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium">{TEMPLATE_LABELS[kind] || kind}</div>
+                  <div className="mt-0.5 text-xs text-ink-500">
+                    Variables:{" "}
+                    {vars.map((v) => (
+                      <code key={v} className="mr-1 rounded bg-surface-100 px-1">
+                        {"{{" + v + "}}"}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+                <button className="btn-ghost text-xs" onClick={() => reset(kind)}>
+                  Reset to default
+                </button>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                <div>
+                  <label className="label">Subject</label>
+                  <input
+                    className="input"
+                    value={current.subject}
+                    onChange={(e) =>
+                      setEditing({
+                        ...editing,
+                        [kind]: { ...current, subject: e.target.value },
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="label">Body (HTML)</label>
+                  <textarea
+                    className="input min-h-[180px] font-mono text-xs"
+                    value={current.body_html}
+                    onChange={(e) =>
+                      setEditing({
+                        ...editing,
+                        [kind]: { ...current, body_html: e.target.value },
+                      })
+                    }
+                  />
+                </div>
+                {isDirty && (
+                  <div className="text-xs text-warn-500">Unsaved changes</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {error && <div className="mt-3 text-sm text-danger-500">{error}</div>}
+      {message && <div className="mt-3 text-sm text-ok-500">{message}</div>}
+      <div className="mt-4 flex justify-end">
+        <button className="btn-primary" disabled={saving} onClick={save}>
+          {saving ? "Saving…" : "Save all templates"}
+        </button>
+      </div>
     </div>
   );
 }

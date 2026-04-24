@@ -134,6 +134,62 @@ def restore_employee(
     return emp
 
 
+@router.get("/{employee_id}/pending-interviews")
+def list_pending_interviews(
+    employee_id: int,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    from app.models import Interview, ResearchRequest
+
+    emp = db.get(Employee, employee_id)
+    if not emp or emp.company_id != company.id:
+        raise HTTPException(404)
+    rows = list(
+        db.execute(
+            select(Interview)
+            .where(
+                Interview.employee_id == emp.id,
+                Interview.status.in_(("scheduled", "no_show")),
+            )
+            .order_by(Interview.scheduled_at)
+        ).scalars()
+    )
+    out = []
+    for iv in rows:
+        research_label = None
+        if iv.research_request_id:
+            rr = db.get(ResearchRequest, iv.research_request_id)
+            research_label = (rr.question[:80] + "…") if rr and len(rr.question) > 80 else (rr.question if rr else None)
+        out.append(
+            {
+                "id": iv.id,
+                "scheduled_at": iv.scheduled_at,
+                "status": iv.status,
+                "link_token": iv.link_token,
+                "research_label": research_label,
+                "invite_sent_at": iv.invite_sent_at,
+                "reminder_sent_at": iv.reminder_sent_at,
+            }
+        )
+    return out
+
+
+@router.post("/{employee_id}/schedule-next")
+def schedule_next(
+    employee_id: int,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.scheduler_service import schedule_for_employee
+
+    emp = db.get(Employee, employee_id)
+    if not emp or emp.company_id != company.id:
+        raise HTTPException(404)
+    iv = schedule_for_employee(db, company, emp)
+    return {"interview_id": iv.id, "scheduled_at": iv.scheduled_at}
+
+
 @router.post("/{employee_id}/start-test-interview")
 def start_test_interview(
     employee_id: int,

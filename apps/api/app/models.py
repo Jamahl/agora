@@ -41,6 +41,7 @@ class Company(Base):
     notion_connection_id: Mapped[Optional[str]] = mapped_column(String(200))
     admin_email: Mapped[Optional[str]] = mapped_column(String(200))
     okr_tag_threshold: Mapped[float] = mapped_column(Float, default=0.55)
+    email_templates: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     onboarding_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -135,6 +136,8 @@ class Interview(Base):
         ForeignKey("research_request.id", ondelete="SET NULL")
     )
     reminder_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    invite_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    summary_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

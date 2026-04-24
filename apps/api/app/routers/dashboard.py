@@ -351,7 +351,14 @@ def employee_detail(
                 "status": iv.status,
                 "insight_count": len(ins),
                 "top_insights": [
-                    {"type": i.type, "content": i.content, "severity": i.severity} for i in ins[:5]
+                    {
+                        "id": i.id,
+                        "type": i.type,
+                        "content": i.content,
+                        "severity": i.severity,
+                        "review_state": i.review_state,
+                    }
+                    for i in ins[:5]
                 ],
                 "sentiment": (
                     {
