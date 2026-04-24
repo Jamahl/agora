@@ -13,6 +13,7 @@ const NAV: NavItem[] = [
   { href: "/dashboard/themes", label: "Themes" },
   { href: "/dashboard/research", label: "Research" },
   { href: "/dashboard/review", label: "Review" },
+  { href: "/dashboard/alerts", label: "Alerts" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
 
