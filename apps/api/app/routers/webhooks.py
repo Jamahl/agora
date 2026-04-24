@@ -30,11 +30,23 @@ async def retell_webhook(
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> dict:
+    from app.logging_conf import log as _log
+
     body = await request.body()
-    sig = request.headers.get("X-Retell-Signature") or request.headers.get("x-retell-signature")
-    if not _verify(body, sig):
-        # local dev convenience: allow if no sig header AND we're in dev
-        if sig is not None:
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    sig = headers.get("x-retell-signature")
+    verified = _verify(body, sig)
+    if not verified:
+        _log.warning(
+            "retell_webhook_unverified",
+            has_sig=bool(sig),
+            sig_prefix=(sig[:20] if sig else None),
+            header_keys=list(headers.keys()),
+            body_len=len(body),
+        )
+        import os
+
+        if os.environ.get("VERIFY_RETELL_WEBHOOK", "true").lower() != "false":
             raise HTTPException(401, "Invalid signature")
     payload = json.loads(body or b"{}")
     event = payload.get("event")
