@@ -8,11 +8,21 @@ type ReviewItem = {
   id: number;
   content: string;
   type: string;
-  severity: string;
+  severity: number | string;
   created_at: string;
   employee: { id: number; name: string };
   interview: { id: number; scheduled_at: string };
 };
+
+function severityLabel(severity: number | string): string {
+  if (typeof severity === "number") {
+    if (severity >= 4) return "critical";
+    if (severity === 3) return "high";
+    if (severity === 2) return "medium";
+    return "low";
+  }
+  return String(severity || "");
+}
 
 function typeTone(type: string): string {
   const t = (type || "").toLowerCase();
@@ -28,11 +38,10 @@ function typeTone(type: string): string {
   return "bg-surface-100 text-ink-700";
 }
 
-function severityTone(severity: string): string {
-  const s = (severity || "").toLowerCase();
+function severityTone(severity: number | string): string {
+  const s = severityLabel(severity).toLowerCase();
   if (s === "high" || s === "critical") return "bg-danger-500/10 text-danger-500";
   if (s === "medium") return "bg-warn-500/10 text-warn-500";
-  if (s === "low") return "bg-surface-100 text-ink-700";
   return "bg-surface-100 text-ink-700";
 }
 
@@ -125,7 +134,7 @@ export default function ReviewQueuePage() {
                     {labelize(item.type)}
                   </span>
                   <span className={`badge ${severityTone(item.severity)}`}>
-                    {labelize(item.severity)}
+                    {labelize(severityLabel(item.severity))}
                   </span>
                 </div>
               </div>

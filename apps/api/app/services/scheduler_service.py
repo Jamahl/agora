@@ -203,6 +203,9 @@ def reminder_and_noshow_job() -> None:
         for iv in upcoming:
             emp = db.get(Employee, iv.employee_id)
             company = db.get(Company, iv.company_id)
+            if not emp or emp.status != "active":
+                iv.reminder_sent_at = now  # stamp so we don't retry
+                continue
             link = _interview_link(iv.link_token)
             tpl = get_template(company.email_templates, "reminder")
             vars_ = _base_vars(company, emp, iv, link)
@@ -229,8 +232,11 @@ def reminder_and_noshow_job() -> None:
             iv.status = "no_show"
             emp = db.get(Employee, iv.employee_id)
             company = db.get(Company, iv.company_id)
-            # reschedule immediately
-            schedule_for_employee(db, company, emp)
+            # skip archived employees — no reschedule, no admin alert
+            if not emp or emp.status != "active":
+                continue
+            # do NOT reschedule immediately — daily_cadence_job at 3am handles it
+            # so employees get at most one invite per day, not one per no-show detection
             # after two consecutive no-shows, alert admin
             recent = list(
                 db.execute(
