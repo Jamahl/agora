@@ -648,6 +648,86 @@ Notion pages are indexed (`notion_page` w/ embeddings) but only the chat RAG que
 
 Without step 2 the variable is unused; without step 3 the prompt doesn't pick up. Both halves of the contract have to move together.
 
+### Per-research-request curated context (recommended after Notion-into-agent)
+The cosine-top-K Notion injection above is a generic default keyed on the employee. The richer pattern: when leadership creates a research request, they hand-pick which Notion pages (and future integrations — Jira epics, Slack channels, Linear projects) the agent should treat as context for that round. Result: the agent asks smarter questions because it knows both (a) the research goal and (b) the curated source material.
+
+**Schema** — new join table that's source-agnostic so non-Notion integrations slot in later:
+
+```python
+class ResearchContext(Base):
+    __tablename__ = "research_context"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    research_request_id: Mapped[int] = mapped_column(
+        ForeignKey("research_request.id", ondelete="CASCADE")
+    )
+    source_type: Mapped[str] = mapped_column(String(32))   # 'notion' | 'jira' | 'slack' | ...
+    source_id: Mapped[str] = mapped_column(String(200))    # notion page_id, jira issue key, etc.
+    label: Mapped[str | None] = mapped_column(String(500)) # cached display title
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+```
+
+Migration adds the table; nothing else changes shape.
+
+**UI — research plan screen** (`/dashboard/research/{id}`, draft state):
+
+Add a "Context for the agent" panel under the employees list. Tabs per available source:
+- **Notion** — tree of synced pages (existing `/integrations/notion/pages`), checkboxes
+- **(future)** Jira issues, Slack channels, etc. — same checkbox tree
+
+Selections POST to `PATCH /research/{id}/context` body `{items:[{source_type, source_id, label}]}` — replaces the set. Surfaced in the plan panel as chips.
+
+**Backend — context resolution** when a research-linked interview starts:
+
+In `build_dynamic_vars()` (`apps/api/app/services/retell_service.py`), branch on `interview.research_request_id`:
+
+```python
+if interview.research_request_id:
+    chunks = []
+    ctx = db.execute(
+        select(ResearchContext).where(
+            ResearchContext.research_request_id == interview.research_request_id
+        )
+    ).scalars()
+    for c in ctx:
+        if c.source_type == "notion":
+            pages = db.execute(
+                select(NotionPage).where(
+                    NotionPage.company_id == company.id,
+                    NotionPage.notion_page_id == c.source_id,
+                )
+            ).scalars().all()
+            for p in pages:
+                chunks.append(f"# {p.title}\n{p.content[:1200]}")
+        # elif c.source_type == 'jira': ... fetch via composio
+    research_curated_context = "\n\n".join(chunks)
+else:
+    research_curated_context = ""
+```
+
+Two distinct dynamic vars now flow into the prompt:
+- `notion_context` — generic top-K cosine (employee role/dept/memory) — always populated when Notion is connected
+- `research_context_pages` — admin-curated for this research request — only populated for research-linked calls
+
+**Prompt update** (`packages/prompts/interview-agent.md`) — must teach the agent both kinds and how they differ:
+
+```
+{{notion_context}}
+
+{{research_context_pages}}
+
+When research_context_pages is present, this is a focused interview. Leadership has hand-picked the documents above as the most relevant material for the question they're trying to answer ({{research_context}}). Use those pages to ground specific follow-ups — e.g. "the Q3 plan I'm looking at says X — does that match how it's actually playing out?". Don't quote pages verbatim; reference them naturally.
+
+The notion_context block (if present) is broader background to help you understand references the employee makes — not a target for questions.
+```
+
+Re-run `scripts/provision_retell_agent.py` after editing the prompt.
+
+**Why this composes well:**
+
+- Source-agnostic table means adding Jira/Slack later is a one-line `elif` in the resolver, no schema change.
+- Curated context is per-research-request, so the same employee gets different framing in their cadence call vs a research call vs a different research call — exactly what the PRD's Mode B agent design implies.
+- The cosine top-K layer still runs underneath as a fallback for general context. Curated takes priority in the prompt.
+
 ### Adding auth / multi-admin
 Today `admin_session` is single-admin by cookie. Replace `get_current_company` dependency in `security.py` with a real user→session mapping, add `user_id` FK on `admin_session`. Start with one user row for the existing cookie to keep compatibility.
 
@@ -666,6 +746,7 @@ These aren't bugs — they're conscious omissions or things we punted on.
 - **No idempotency keys on email sends.** Rate a re-queued send → possible duplicate. Add if scale bites.
 - **Notion indexing is all-or-nothing** — reselecting pages deletes and re-syncs. Add diff-based sync if page counts grow.
 - **Interview agent does not see Notion context.** Indexed pages are queried only by the leadership chat RAG. Wiring Notion into the interview's dynamic vars also requires a matching update to `packages/prompts/interview-agent.md` so the agent knows the context is there and how to handle it (don't read it back at the employee, use it only to disambiguate references). Recipe in *Where to extend → Injecting Notion context into the interview agent*.
+- **No per-research-request curated context.** Leadership can't currently pick which docs the agent should treat as the source material for a given research round — context is either absent (today) or generic-top-K (after Notion-into-agent recipe). The richer pattern lets a manager tag specific Notion pages (and later Jira issues, Slack channels, etc.) per research request so the agent asks sharper questions grounded in those exact documents. Schema is source-agnostic so non-Notion integrations drop in cleanly. Recipe in *Where to extend → Per-research-request curated context*.
 - **Voice (ElevenLabs) needs pilot tuning.** Currently `11labs-Adrian` — a placeholder. Swap per §voice-choice in the interview-agent prompt's maintainer notes.
 - **No rate limiting on public `/interview/by-token/*` endpoints.** Tokens are long + scoped + expire, so risk is low, but add a reasonable per-IP limit before going public.
 - **pytest coverage is skeletal** — only `slot_picker` has unit tests. Synthesis should have fixture-based tests once prompt behaviour is stable.
