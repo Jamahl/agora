@@ -77,7 +77,7 @@ Full product rationale lives in [`AGORA_PRD.md`](./AGORA_PRD.md). This document 
 
 | Layer | Choice | Why |
 |---|---|---|
-| Frontend | Next.js 15 App Router + TS + Tailwind + recharts | Server components for dashboard, client for chat dock + interview page. One framework, no router split. |
+| Frontend | Next.js 15 App Router + TS + Tailwind + recharts | Server components for dashboard, client for chat dock + interview page. One framework, no router split. Chat UI is custom-built (`components/ChatDock.tsx`) — no third-party chat UI library. No Vercel AI SDK; all LLM calls live in the Python backend. |
 | Backend | FastAPI 3.12 + SQLAlchemy 2 + Alembic | Best ergonomics for LLM pipelines, structured output, Pydantic everywhere. |
 | DB | Postgres 16 + pgvector | Structured + vector in one store. Simpler to reason about than two systems. |
 | Voice | Retell Web Call SDK, BYO OpenAI LLM | Purpose-built for browser voice, custom function calls, transcript webhooks. LLM cost stays controllable by BYO. |
@@ -229,7 +229,7 @@ interview
 insight
   id  interview_id(fk)  employee_id(fk)  company_id(fk)
   type CHECK IN (blocker|win|start_doing|stop_doing|tooling_gap|sentiment_note|other)
-  content  direct_quote  severity(1-5)  confidence(0-1)
+  content  direct_quote  severity(INTEGER default 3, observed range 1–4)  confidence(0-1)
   review_state CHECK IN (live|needs_review|suppressed|omitted)
   embedding(vector(3072))  created_at
 
@@ -376,7 +376,8 @@ Grouped by concern. All admin routes require a valid signed `agora_admin` cookie
    │                                  │        research report if linked)
    │                                  │
    └── no_show ◀──── 30 min past scheduled_at, still scheduled
-           (new scheduled row auto-created; admin alerted after 2 consecutive)
+           (daily_cadence reschedules next morning; admin alerted after 2 consecutive)
+           NOTE: do NOT reschedule immediately on no_show — causes invite email spam
 ```
 
 ### `insight.review_state`
@@ -424,7 +425,7 @@ reminder_and_noshow_job  (every 5 min)
   for each scheduled interview with scheduled_at <= now+15m and reminder not yet sent:
     send reminder; stamp reminder_sent_at
   for each scheduled interview with scheduled_at < now-30m:
-    mark no_show; auto-schedule replacement (which re-invites)
+    mark no_show (do NOT reschedule immediately — daily_cadence handles it at 3am)
     if 2 consecutive no_shows → email admin
 
 theme_cluster_job  (02:00 UTC)
@@ -530,11 +531,36 @@ docker compose up -d --force-recreate api
 
 # 6. Open the app
 open http://localhost:3010
+# Ports: web=3010  api=8010  postgres=5433
 ```
 
 Env-file changes are only picked up on container *create*. `docker compose restart` reuses the existing container and silently ignores new env values — which has burned us twice. Always use `up -d --force-recreate api`.
 
 To connect Gmail + Notion: Settings → Integrations → Connect → consent → Sync pages.
+
+### Debugging authenticated endpoints from the terminal
+
+The admin cookie is signed with `itsdangerous.URLSafeSerializer`. To call any admin endpoint manually:
+
+```bash
+# 1. Get the raw token from the DB
+TOKEN=$(docker exec agora-postgres-1 psql -U agora -d agora -t -c \
+  "SELECT cookie_token FROM admin_session ORDER BY last_seen_at DESC LIMIT 1;" | tr -d ' ')
+
+# 2. Sign it
+COOKIE=$(docker exec agora-api-1 python3 -c "
+from itsdangerous import URLSafeSerializer
+import os
+s = URLSafeSerializer(os.environ['ADMIN_COOKIE_SECRET'], salt='admin-cookie')
+print(s.dumps({'t': '$TOKEN'}))
+")
+
+# 3. Call any admin endpoint
+curl -s http://localhost:8010/admin/company \
+  -H "Cookie: agora_admin=$COOKIE" | python3 -m json.tool
+```
+
+The cookie name is `agora_admin`. The secret is `ADMIN_COOKIE_SECRET` in `.env`.
 
 ---
 
@@ -542,13 +568,19 @@ To connect Gmail + Notion: Settings → Integrations → Connect → consent →
 
 1. **`docker compose restart` does not re-read `.env`.** Use `up -d --force-recreate <service>`.
 2. **Cloudflare quick tunnels default to QUIC (UDP 443).** Many networks block it — output hangs with `failed to dial to edge with quic`. Add `--protocol http2`.
-3. **Composio v1 requires an explicit toolkit version** for manual `tools.execute()`. `"latest"` is rejected. Client resolves latest per-toolkit at init time and passes via `toolkit_versions={...}`. If Composio bumps a tool breaking-ly, the ingest may change shape — the Notion list/fetch code has defensive unwrapping helpers (`_extract_page_items`, `_page_title`) for that reason.
-4. **Retell webhook signature verify is finicky** — the bundled HMAC check was rejecting legitimate Retell payloads on 4.x of the SDK. `VERIFY_RETELL_WEBHOOK=false` is the MVP posture; re-enable in production once a diagnostic pass confirms body encoding. Missed webhooks can be recovered via `scripts/recover_interview.py <interview_id>` — pulls the call from Retell API and runs synthesis.
-5. **pgvector's ivfflat/hnsw index cap is 2000 dims.** We use 3072-dim (`text-embedding-3-large`) for quality. Cosine searches are sequential-scan, which is fine below ~10k rows. Beyond that: drop to 1536 via `dimensions` param, or switch to a vector DB.
-6. **OpenAI `responses.parse` vs `beta.chat.completions.parse`** — we use `responses.parse` which returns `output_parsed`. If the SDK renames or deprecates, swap in `beta.chat.completions.parse` — same structured-output ergonomics.
-7. **APScheduler + psycopg3** — `SQLAlchemyJobStore` expects the full SQLA URL including `+psycopg`. An earlier version of scheduler.py stripped the driver suffix and pulled in psycopg2 as a fallback — removed, keep the URL intact.
-8. **Next.js 15 + react 18.3** — the stack is fine. We pinned `retell-client-js-sdk@2.0.7` (2.0.8 doesn't exist on npm).
-9. **Email HTML attachments** — Gmail via Composio currently accepts a single attachment via the `attachment` arg; we pass the `.ics` there. Multi-attach needs a wrapper.
+3. **Cloudflare `trycloudflare.com` tunnel URLs are ephemeral.** Every `cloudflared tunnel` run gets a new random subdomain. If Docker is stopped and restarted the tunnel URL changes — Retell will be posting webhooks to the old dead URL. After restarting Docker: re-run the tunnel, update `RETELL_WEBHOOK_BASE_URL` in `.env`, force-recreate the api container. Any interview stuck as `in_progress` because of a missed webhook has two recovery paths:
+   - **Script (preferred):** `docker compose exec api python /scripts/recover_interview.py <interview_id>` — pulls the call from Retell API and runs synthesis in-process.
+   - **Webhook replay:** `curl -s https://api.retellai.com/v2/get-call/<call_id> -H "Authorization: Bearer $RETELL_API_KEY" > /tmp/call.json` then POST `{"event":"call_analyzed","call":<contents of call.json>}` to `http://localhost:8010/webhooks/retell`. Useful when you can't exec into the container.
+4. **`insight.severity` is an integer (1–4), not a string.** The DB column is `INTEGER DEFAULT 3`. Any frontend code rendering severity must map it to a label (`1=low 2=medium 3=high 4=critical`) before string operations — calling `.toLowerCase()` or `.replace()` directly on the raw value throws a TypeError and crashes the component.
+5. **Immediate no-show rescheduling causes invite spam.** The `reminder_and_noshow_job` must NOT call `schedule_for_employee()` directly — it runs every 5 min, so each no-show detection would fire a new invite. Let `daily_cadence_job` (3am) handle rescheduling; employees get at most one fresh invite per day.
+6. **LOOPS_API_KEY is needed for email fallback.** Without it (and without a Gmail connection), `send_invite` and `send_reminder` will return `{skipped: true, reason: "no_loops_api_key"}` — no crash, but no email delivered. Set `LOOPS_API_KEY` in `.env` or connect Gmail via Settings → Integrations.
+7. **Composio v1 requires an explicit toolkit version** for manual `tools.execute()`. `"latest"` is rejected. Client resolves latest per-toolkit at init time and passes via `toolkit_versions={...}`. If Composio bumps a tool breaking-ly, the ingest may change shape — the Notion list/fetch code has defensive unwrapping helpers (`_extract_page_items`, `_page_title`) for that reason.
+8. **Retell webhook signature verify is finicky** — the bundled HMAC check was rejecting legitimate Retell payloads on 4.x of the SDK. `VERIFY_RETELL_WEBHOOK=false` is the MVP posture; re-enable in production once a diagnostic pass confirms body encoding. Missed webhooks can be recovered via `scripts/recover_interview.py <interview_id>` — pulls the call from Retell API and runs synthesis.
+9. **pgvector's ivfflat/hnsw index cap is 2000 dims.** We use 3072-dim (`text-embedding-3-large`) for quality. Cosine searches are sequential-scan, which is fine below ~10k rows. Beyond that: drop to 1536 via `dimensions` param, or switch to a vector DB.
+10. **OpenAI `responses.parse` vs `beta.chat.completions.parse`** — we use `responses.parse` which returns `output_parsed`. If the SDK renames or deprecates, swap in `beta.chat.completions.parse` — same structured-output ergonomics.
+11. **APScheduler + psycopg3** — `SQLAlchemyJobStore` expects the full SQLA URL including `+psycopg`. An earlier version of scheduler.py stripped the driver suffix and pulled in psycopg2 as a fallback — removed, keep the URL intact.
+12. **Next.js 15 + react 18.3** — the stack is fine. We pinned `retell-client-js-sdk@2.0.7` (2.0.8 doesn't exist on npm).
+13. **Email HTML attachments** — Gmail via Composio currently accepts a single attachment via the `attachment` arg; we pass the `.ics` there. Multi-attach needs a wrapper.
 
 ---
 
@@ -577,6 +609,45 @@ A few concrete entry points keyed to the most likely additions.
 ### Changing the interview agent behaviour
 Edit `packages/prompts/interview-agent.md`, then **re-run** `scripts/provision_retell_agent.py` (or update the LLM via Retell SDK). This is the source of truth; the code just loads the file.
 
+### Injecting Notion context into the interview agent
+Notion pages are indexed (`notion_page` w/ embeddings) but only the chat RAG queries them today. The interview agent does **not** see them. Wiring it in (≈30 min):
+
+1. In `apps/api/app/services/retell_service.py`, add a Notion top-K helper and include it in `build_dynamic_vars()`:
+
+   ```python
+   from app.clients.openai_client import embed
+   from app.models import NotionPage
+
+   def _notion_context(db, company_id, employee) -> str:
+       seed = " ".join(filter(None, [
+           employee.job_title, employee.department, employee.memory_summary or ""
+       ]))
+       if not seed.strip():
+           return ""
+       qemb = embed(seed)
+       rows = db.execute(
+           select(NotionPage)
+           .where(NotionPage.company_id == company_id, NotionPage.embedding.is_not(None))
+           .order_by(NotionPage.embedding.cosine_distance(qemb))
+           .limit(3)
+       ).scalars().all()
+       return "\n\n".join(f"# {p.title}\n{p.content[:1200]}" for p in rows)
+   ```
+
+   Then add `"notion_context": _notion_context(db, company.id, employee)` to the returned dict.
+
+2. **Update `packages/prompts/interview-agent.md`** to reference the new variable. The prompt currently has `{{memory_summary}}` and `{{research_context}}` blocks near the top — add a sibling `{{notion_context}}` block with explicit framing so the agent knows how to use it without reading it back at the employee:
+
+   ```
+   {{notion_context}}
+
+   The above is quiet context from the company's Notion workspace — projects, people, handbook pages relevant to {{employee_name}}. Don't quote it back at them or pretend you read their docs. Use it only so when they reference "Project Zenith" or "the activation goal", you know what they mean.
+   ```
+
+3. **Re-run** `scripts/provision_retell_agent.py` so Retell loads the new template. Without this step the new variable is set but the prompt won't reference it — silent no-op.
+
+Without step 2 the variable is unused; without step 3 the prompt doesn't pick up. Both halves of the contract have to move together.
+
 ### Adding auth / multi-admin
 Today `admin_session` is single-admin by cookie. Replace `get_current_company` dependency in `security.py` with a real user→session mapping, add `user_id` FK on `admin_session`. Start with one user row for the existing cookie to keep compatibility.
 
@@ -594,6 +665,7 @@ These aren't bugs — they're conscious omissions or things we punted on.
 - **Research request `status` skips the `running` state** the PRD defines — we use `approved` throughout the run and go straight to `complete` when all interviews land. Add `running` if admins need a distinction between "approved, nothing yet" and "in flight".
 - **No idempotency keys on email sends.** Rate a re-queued send → possible duplicate. Add if scale bites.
 - **Notion indexing is all-or-nothing** — reselecting pages deletes and re-syncs. Add diff-based sync if page counts grow.
+- **Interview agent does not see Notion context.** Indexed pages are queried only by the leadership chat RAG. Wiring Notion into the interview's dynamic vars also requires a matching update to `packages/prompts/interview-agent.md` so the agent knows the context is there and how to handle it (don't read it back at the employee, use it only to disambiguate references). Recipe in *Where to extend → Injecting Notion context into the interview agent*.
 - **Voice (ElevenLabs) needs pilot tuning.** Currently `11labs-Adrian` — a placeholder. Swap per §voice-choice in the interview-agent prompt's maintainer notes.
 - **No rate limiting on public `/interview/by-token/*` endpoints.** Tokens are long + scoped + expire, so risk is low, but add a reasonable per-IP limit before going public.
 - **pytest coverage is skeletal** — only `slot_picker` has unit tests. Synthesis should have fixture-based tests once prompt behaviour is stable.
@@ -601,4 +673,4 @@ These aren't bugs — they're conscious omissions or things we punted on.
 
 ---
 
-*Last updated: 2026-04-24. Owner: Jamahl McMurran (BetterLabs). If something drifts from the code, the code wins — update this file in the same PR.*
+*Last updated: 2026-04-29. Owner: Jamahl McMurran (BetterLabs). If something drifts from the code, the code wins — update this file in the same PR.*
