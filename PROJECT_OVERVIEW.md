@@ -22,7 +22,7 @@ This document is the engineering handover. If you're taking over building Agora,
 A voice-AI company intelligence tool. An admin (CEO / department head) onboards employees and OKRs. Agora then:
 
 1. Runs autonomous voice interviews on a recurring cadence (Retell web call, GPT‑4.1 behind the scenes).
-2. Synthesises each transcript into typed **insights** (blocker / win / start_doing / stop_doing / tooling_gap / sentiment_note / other), attaches sentiment scores, and tags them to relevant OKRs via embedding similarity.
+2. Synthesises each transcript into typed **insights** (blocker / win / start_doing / stop_doing / tooling_gap / sentiment_note / other), attaches sentiment scores, and tags them to relevant OKRs/KRs via embedding shortlist + structured LLM relevance judgment.
 3. Surfaces the state of the business on a dashboard: top blockers, OKR health, sentiment trends, themes (HDBSCAN clustering), employee timelines.
 4. Lets leadership chat against the memory (RAG over insights + Notion pages) and commission ad-hoc research rounds that schedule one-off interviews and produce progressive reports.
 
@@ -113,7 +113,7 @@ Quick tunnels are random and ephemeral by design; they will break again whenever
 | Backend | FastAPI 3.12 + SQLAlchemy 2 + Alembic | Best ergonomics for LLM pipelines, structured output, Pydantic everywhere. |
 | DB | Postgres 16 + pgvector | Structured + vector in one store. Simpler to reason about than two systems. |
 | Voice | Retell Web Call SDK, BYO OpenAI LLM | Purpose-built for browser voice, custom function calls, transcript webhooks. LLM cost stays controllable by BYO. |
-| LLM | OpenAI GPT-4.1 + `text-embedding-3-large` (3072-dim) | Quality, structured output reliability, tool calls. Swap to gpt-5/6 when they land. |
+| LLM | OpenAI GPT-4.1 + GPT-4.1 nano judge + `text-embedding-3-large` (3072-dim) | GPT-4.1 handles synthesis quality; `OPENAI_JUDGE_MODEL` defaults to `gpt-4.1-nano` for bounded classifier/judge tasks like OKR relevance; embeddings stay in pgvector. |
 | Scheduler | APScheduler w/ Postgres jobstore | Right-sized for 5–30 employees. Celery is negative value at this scale; migration path is ~1 day if we ever hit the ceiling. |
 | Email | Composio → Gmail (primary), Loops (fallback) | Sending from the admin's own Gmail means invites don't look like spam and `.ics` attachments work. Loops is a fallback (set `LOOPS_API_KEY` and disconnect Gmail). |
 | Calendar | `.ics` attachment | Works with every mail client. No need to create Google Calendar events directly. |
@@ -504,7 +504,7 @@ This is the single most important path. If you break it, the product doesn't exi
    1. **Cleanup** — build `cleaned_transcript_json` with speaker/ts/text per segment
    2. **Extract** — GPT-4.1 structured output → list of typed insights (respects sensitive-omitted spans)
    3. **Embed** — `text-embedding-3-large` in one batch call
-   4. **OKR-tag** — cosine similarity of insight embedding vs OKR embeddings, top-3 above `okr_tag_threshold` (default 0.55) → `insight_okr_tag` rows
+   4. **OKR-tag** — cosine similarity shortlists active OKRs/KRs, then a strict structured LLM classifier decides material business relevance. Approved objective matches create `insight_okr_tag`; approved KR matches create `insight_key_result_tag` with a concise `match_reason`. If the classifier fails, synthesis falls back to the previous threshold-only behavior (`okr_tag_threshold`, default 0.55; KR threshold maxes to at least 0.65).
    5. **Sentiment** — GPT-4.1 structured output → `InterviewSentiment` row (morale/energy/candor/urgency + notes)
    6. **Memory rollup** — GPT-4.1 generates a 2nd-person briefing from this + last two interviews → stored on `employee.memory_summary` (used in next interview's dynamic vars)
    7. **Research report** — if `research_request_id` is set, `rebuild_report()` regenerates `report_json` and fires admin notif at threshold
@@ -774,7 +774,7 @@ This branch added the first connected-intelligence pass from `001-improvements.m
 - **Richer citations** — `services/rag.py` returns `source_label`, `source_category`, `source_url`, and `preview` for insight/Notion citations. The chat UI renders clickable, focusable source pills and distinguishes employee signal from company documents.
 - **Research briefs** — `research_request.plan_json` now carries brief fields (`goal`, `research_type`, `audience_mode`, `selected_employees`, `sample_questions`, `timeline`, `readout_threshold`) while preserving the legacy `employees`/`eta_days` shape for compatibility.
 - **Research style affects interview framing** — when a research-linked interview starts, `retell_service.build_dynamic_vars()` includes the brief's `goal`, `research_type`, and `sample_questions` in `research_context`, so the Retell agent can adapt follow-ups to root-cause, pulse-check, decision-support, idea-discovery, or follow-up work.
-- **OKR scope + KR signal** — `okr.scope_type/scope_id` support company vs department OKRs. `insight_key_result_tag` stores high-confidence KR-level links created during synthesis at a higher threshold than objective-level OKR tags.
+- **OKR scope + KR signal** — `okr.scope_type/scope_id` support company vs department OKRs. `insight_key_result_tag` stores high-confidence KR-level links created during synthesis. Matching now uses embeddings for candidate recall and a strict structured LLM pass for final relevance, so terse KRs like "10 acquisitions" can still catch concrete operational signals like slow deal review or due diligence delays without globally lowering similarity thresholds.
 - **Leadership-managed context** — `company_context` blocks are editable from Settings and injected into Retell dynamic vars as `leadership_context` for the next interview call. The prompt references this block and tells the agent to use it for probing, not recite it.
 - **Alert/sensitive flow** — global dashboard alert banners were removed; alerts live in the Alerts nav with an unread sidebar badge. Interview pages now show sensitive handling context, linked alerts, omitted topics, and reviewed/pending status.
 - **Employee leadership summary** — employee detail now returns aggregate stats (`completed_interviews`, `pending_interviews`, `average_sentiment`, `last_sentiment`) and the UI leads with status plus a concise manager-facing overview. Interview history only shows completed interviews with actual signal; scheduled/empty interviews stay in Pending interviews or out of history. The pending-interview card clarifies that `schedule-next` both schedules the cadence slot and sends the invite immediately.
@@ -782,6 +782,7 @@ This branch added the first connected-intelligence pass from `001-improvements.m
 - **Settings navigation** — Settings uses top anchor pills for Profile, Cadence, Context, Research, Integrations, and Email templates so admins can jump directly to the right configuration area without scanning a long page.
 - **Research style visibility** — Settings includes a Research styles card explaining the five per-brief styles (`root_cause`, `pulse_check`, `decision_support`, `idea_discovery`, `follow_up`) and links admins to create or edit briefs. Styles are not global config; they are stored on each research request and passed into Retell as `research_context` when that round's interviews start.
 - **Retell webhook recovery safety net** — `recover_ended_retell_calls_job` runs every 5 minutes. If a call is stuck `in_progress` because the local tunnel missed Retell's end webhook, it retrieves the Retell call, marks the interview completed, saves transcript/recording URLs, and runs synthesis once a transcript is available. This prevents demo/local tunnel misses from hiding completed interviews forever.
+- **Prior-memory guardrails** — Retell receives prior `memory_summary` only for contextual follow-up. The interview prompt now tells the agent to ask whether prior topics are still true, not present them as current facts. Synthesis only extracts employee/user-stated claims from the current interview; old memory mentioned only by the agent must be omitted unless the employee confirms, updates, denies, or expands on it.
 
 ### Multi-tenant (multi-company)
 The DB is already company-scoped — every table carries `company_id`. The session layer assumes one company; replace `get_current_company` to resolve from the cookie→user→company chain.
@@ -793,6 +794,7 @@ The DB is already company-scoped — every table carries `company_id`. The sessi
 These aren't bugs — they're conscious omissions or things we punted on.
 
 - **Next priority before the next demo: replace quick Cloudflare tunnel with a stable webhook URL.** Set up either a Cloudflare named tunnel with a fixed hostname or deploy the API to a stable demo environment, then update Retell's `webhook_url` permanently. Quick `trycloudflare.com` tunnels are random/ephemeral and will break again if used for demos.
+- **OKR tagging now uses embedding recall + LLM judgment, but still depends on OKR clarity.** Synthesis embeds every extracted insight, shortlists active objective/KR candidates, and asks a strict structured LLM classifier whether the insight materially affects each candidate. This catches human-obvious links that embeddings miss, such as deal-review delays affecting an acquisitions KR. Very vague OKRs still reduce explainability; prefer concrete KR descriptions and keep a visible "unlinked signal" explanation in the OKR UI.
 - **Retell webhook signature verification is disabled by default** (`VERIFY_RETELL_WEBHOOK=false`). Acceptable for local pilot over a cloudflared tunnel where only Retell knows the URL. Must be flipped on before any hosted deploy.
 - **HDBSCAN theme clustering needs ≥5 insights in a 30-day window** to produce anything. First two weeks of a pilot won't have themes. UI shows a friendly empty state.
 - **Research request `status` skips the `running` state** the PRD defines — we use `approved` throughout the run and go straight to `complete` when all interviews land. Add `running` if admins need a distinction between "approved, nothing yet" and "in flight".

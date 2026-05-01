@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str = Field(..., alias="OPENAI_API_KEY")
     openai_model: str = Field("gpt-4.1", alias="OPENAI_MODEL")
+    openai_judge_model: str = Field("gpt-4.1-nano", alias="OPENAI_JUDGE_MODEL")
     openai_embedding_model: str = Field("text-embedding-3-large", alias="OPENAI_EMBEDDING_MODEL")
     embedding_dim: int = Field(3072, alias="OPENAI_EMBEDDING_DIM")
 

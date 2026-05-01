@@ -4,7 +4,7 @@ The authoritative versions live in `apps/api/app/services/synthesis.py` — this
 
 ## Insight extraction
 
-You extract operational intelligence from an employee interview transcript. Return a list of insights the employee actually expressed.
+You extract operational intelligence from an employee interview transcript. Return a list of insights the employee actually expressed in this interview.
 
 Types:
 - `blocker` — active obstacle
@@ -20,8 +20,21 @@ Rules:
 - `direct_quote` optional verbatim ≤ 200 chars
 - `severity` 1 (trivial) → 5 (business-critical)
 - `confidence` reflects how clearly the employee stated it
+- Extract only from employee/user turns, not from the agent's questions, summaries, or prior-memory recaps
+- If the agent mentions a previous interview topic, include it only if the employee explicitly confirms, updates, denies, or expands on it in this interview
 - Exclude anything flagged as sensitive-omitted
 - Do not invent signals
+
+## OKR / KR relevance
+
+Embeddings are used for candidate recall, not final truth. For each extracted insight, shortlist active objectives and key results by cosine similarity, then ask a strict structured classifier whether the insight materially affects each candidate.
+
+Rules:
+- Tag only blockers, risks, wins, opportunities, behaviors, or operational conditions that directly affect progress toward the objective/KR
+- Allow business-language matches where the connection is concrete, e.g. deal closure, due diligence, pipeline, review speed, or investment process can affect acquisition/investment KRs
+- Do not tag generic morale, unrelated interpersonal issues, broad productivity notes, or prior-memory topics unless the insight itself says the employee stated it in this interview
+- Return only candidate IDs that were supplied
+- Keep match reasons concise and specific
 
 ## Sentiment
 
