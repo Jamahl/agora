@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.clients.openai_client import embed, embed_batch, structured
@@ -99,6 +99,7 @@ OKR_RELEVANCE_SYSTEM = (
     "that directly affects progress toward the OKR or key result. "
     "Business wording may differ: for example, deal closure, due diligence, pipeline, review speed, or investment process "
     "can be relevant to acquisition or investment KRs if the connection is concrete. "
+    "Prefer the single most directly affected key result; approve multiple KRs only when the insight independently and concretely affects each. "
     "Do not tag generic morale, unrelated interpersonal issues, broad productivity notes, or old prior-memory topics unless "
     "the insight itself says the employee stated it in this interview. "
     "Return only candidate ids you were given. Reasons must be concise and specific."
@@ -228,6 +229,8 @@ def _tag_okrs_for_insights(db: Session, iv: Interview, insight_rows: list[Insigh
         kr_candidates = kr_ranked[:4]
         if not okr_candidates and not kr_candidates:
             continue
+        db.execute(delete(InsightOkrTag).where(InsightOkrTag.insight_id == row.id))
+        db.execute(delete(InsightKeyResultTag).where(InsightKeyResultTag.insight_id == row.id))
         try:
             relevance = structured(
                 [
@@ -259,47 +262,51 @@ def _tag_okrs_for_insights(db: Session, iv: Interview, insight_rows: list[Insigh
             )
         except Exception as exc:
             log.warning("okr_relevance_classifier_failed", insight_id=row.id, error=str(exc))
-            for okr, sim in okr_ranked[:3]:
-                if sim >= threshold:
-                    _set_okr_tag(db, row.id, okr.id, sim)
-            for kr, _okr, sim in kr_ranked[:2]:
-                if sim >= kr_threshold:
-                    _set_kr_tag(
-                        db,
-                        row.id,
-                        kr.id,
-                        sim,
-                        f"Strong semantic match to KR: {kr.description[:160]}",
-                    )
-            continue
-        okr_scores = {okr.id: sim for okr, sim in okr_candidates}
-        kr_scores = {kr.id: sim for kr, _okr, sim in kr_candidates}
-        tagged_okrs: set[int] = set()
-        tagged_krs: set[int] = set()
-        for match in relevance.okrs:
-            if (
-                match.relevant
-                and match.confidence >= 0.7
-                and match.okr_id in okr_scores
-                and match.okr_id not in tagged_okrs
-            ):
-                tagged_okrs.add(match.okr_id)
-                _set_okr_tag(db, row.id, match.okr_id, okr_scores[match.okr_id])
-        for match in relevance.key_results:
-            if (
-                match.relevant
-                and match.confidence >= 0.7
-                and match.key_result_id in kr_scores
-                and match.key_result_id not in tagged_krs
-            ):
-                tagged_krs.add(match.key_result_id)
+            best_kr = kr_ranked[0] if kr_ranked else None
+            if best_kr and best_kr[2] >= kr_threshold:
+                kr, okr, sim = best_kr
+                _set_okr_tag(db, row.id, okr.id, _cos(row.embedding, okr.embedding) if okr.embedding is not None else sim)
                 _set_kr_tag(
                     db,
                     row.id,
-                    match.key_result_id,
-                    kr_scores[match.key_result_id],
-                    match.reason or "LLM-approved OKR relevance",
+                    kr.id,
+                    sim,
+                    f"Strongest semantic match to KR: {kr.description[:160]}",
                 )
+            elif okr_ranked and okr_ranked[0][1] >= threshold:
+                okr, sim = okr_ranked[0]
+                _set_okr_tag(db, row.id, okr.id, sim)
+            continue
+        okr_scores = {okr.id: sim for okr, sim in okr_candidates}
+        kr_by_id = {kr.id: (kr, okr, sim) for kr, okr, sim in kr_candidates}
+        approved_krs = [
+            (match, *kr_by_id[match.key_result_id])
+            for match in relevance.key_results
+            if match.relevant and match.confidence >= 0.7 and match.key_result_id in kr_by_id
+        ]
+        if approved_krs:
+            match, kr, okr, sim = max(approved_krs, key=lambda item: item[3])
+            okr_sim = okr_scores.get(
+                okr.id,
+                _cos(row.embedding, okr.embedding) if okr.embedding is not None else sim,
+            )
+            _set_okr_tag(db, row.id, okr.id, okr_sim)
+            _set_kr_tag(
+                db,
+                row.id,
+                kr.id,
+                sim,
+                match.reason or "Best LLM-approved OKR relevance match",
+            )
+            continue
+        approved_okrs = [
+            match
+            for match in relevance.okrs
+            if match.relevant and match.confidence >= 0.7 and match.okr_id in okr_scores
+        ]
+        if approved_okrs:
+            match = max(approved_okrs, key=lambda item: okr_scores[item.okr_id])
+            _set_okr_tag(db, row.id, match.okr_id, okr_scores[match.okr_id])
 
 
 def run_synthesis(db: Session, interview_id: int) -> None:

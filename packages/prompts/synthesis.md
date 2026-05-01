@@ -32,6 +32,7 @@ Embeddings are used for candidate recall, not final truth. For each extracted in
 Rules:
 - Tag only blockers, risks, wins, opportunities, behaviors, or operational conditions that directly affect progress toward the objective/KR
 - Allow business-language matches where the connection is concrete, e.g. deal closure, due diligence, pipeline, review speed, or investment process can affect acquisition/investment KRs
+- The pipeline stores at most one KR tag per insight: the highest-similarity judge-approved KR
 - Do not tag generic morale, unrelated interpersonal issues, broad productivity notes, or prior-memory topics unless the insight itself says the employee stated it in this interview
 - Return only candidate IDs that were supplied
 - Keep match reasons concise and specific
