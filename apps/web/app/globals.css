@@ -8,7 +8,7 @@
 
 html, body {
   height: 100%;
-  background: #FFFFFF;
+  background: #FBF9FF;
   color: #0B0D10;
 }
 
@@ -26,7 +26,7 @@ body {
   @apply inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition-colors;
 }
 .btn-primary {
-  @apply btn bg-ink-900 text-white hover:bg-ink-700;
+  @apply btn bg-lilac-700 text-white hover:bg-lilac-500;
 }
 .btn-secondary {
   @apply btn bg-surface-100 text-ink-900 hover:bg-surface-200;
@@ -38,10 +38,10 @@ body {
   @apply btn bg-danger-500 text-white hover:opacity-90;
 }
 .input {
-  @apply w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm outline-none focus:border-accent-400;
+  @apply w-full rounded-md border border-surface-200 bg-white px-3 py-2 text-sm outline-none focus:border-lilac-400;
 }
 .card {
-  @apply rounded-xl border border-surface-200 bg-white p-5;
+  @apply rounded-xl border border-lilac-100 bg-white p-5 shadow-sm shadow-lilac-50;
 }
 .label {
   @apply block text-sm font-medium text-ink-700 mb-1;

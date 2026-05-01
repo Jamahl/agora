@@ -80,12 +80,16 @@ class KeyResultOut(KeyResultIn):
 class OKRIn(BaseModel):
     objective: str
     key_results: list[KeyResultIn] = []
+    scope_type: Literal["company", "department"] = "company"
+    scope_id: Optional[str] = None
 
 
 class OKROut(BaseModel):
     id: int
     objective: str
     status: str
+    scope_type: str = "company"
+    scope_id: Optional[str] = None
     key_results: list[KeyResultOut]
 
     model_config = {"from_attributes": True}
@@ -130,6 +134,8 @@ class InsightOut(BaseModel):
 
 class ChatIn(BaseModel):
     message: str
+    session_id: Optional[int] = None
+    context_mode: Literal["all", "page", "custom"] = "all"
     scope_type: Optional[str] = None
     scope_id: Optional[str] = None
 
@@ -137,6 +143,7 @@ class ChatIn(BaseModel):
 class ChatOut(BaseModel):
     reply: str
     citations: list[dict[str, Any]] = []
+    session_id: Optional[int] = None
     needs_research: bool = False
     proposed_research_request_id: Optional[int] = None
 
@@ -148,8 +155,19 @@ class ResearchPlanEmployee(BaseModel):
 
 class ResearchPlan(BaseModel):
     question: str
-    employees: list[ResearchPlanEmployee]
-    eta_days: int
+    goal: Optional[str] = None
+    research_type: Literal[
+        "root_cause", "pulse_check", "decision_support", "idea_discovery", "follow_up"
+    ] = "root_cause"
+    audience_mode: Literal["departments", "employees", "custom"] = "employees"
+    selected_departments: list[str] = Field(default_factory=list)
+    recommended_employees: list[ResearchPlanEmployee] = Field(default_factory=list)
+    selected_employees: list[ResearchPlanEmployee] = Field(default_factory=list)
+    sample_questions: list[str] = Field(default_factory=list)
+    timeline: Optional[str] = None
+    readout_threshold: float = Field(0.75, ge=0, le=1)
+    employees: list[ResearchPlanEmployee] = Field(default_factory=list)
+    eta_days: int = 14
     notes: Optional[str] = None
 
 

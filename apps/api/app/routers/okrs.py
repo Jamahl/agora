@@ -23,6 +23,8 @@ def _reembed(okr_id: int) -> None:
 
 @router.get("", response_model=list[OKROut])
 def list_okrs(
+    scope_type: str | None = None,
+    scope_id: str | None = None,
     company: Company = Depends(get_current_company),
     db: Session = Depends(get_db),
 ) -> list[OKR]:
@@ -32,6 +34,10 @@ def list_okrs(
         .options(selectinload(OKR.key_results))
         .order_by(OKR.created_at)
     )
+    if scope_type:
+        q = q.where(OKR.scope_type == scope_type)
+    if scope_id:
+        q = q.where(OKR.scope_id == scope_id)
     return list(db.execute(q).scalars())
 
 
@@ -42,7 +48,12 @@ def create_okr(
     company: Company = Depends(get_current_company),
     db: Session = Depends(get_db),
 ) -> OKR:
-    okr = OKR(company_id=company.id, objective=body.objective)
+    okr = OKR(
+        company_id=company.id,
+        objective=body.objective,
+        scope_type=body.scope_type,
+        scope_id=body.scope_id if body.scope_type == "department" else None,
+    )
     db.add(okr)
     db.flush()
     for kr in body.key_results:
@@ -72,6 +83,8 @@ def update_okr(
     if not okr or okr.company_id != company.id:
         raise HTTPException(404)
     okr.objective = body.objective
+    okr.scope_type = body.scope_type
+    okr.scope_id = body.scope_id if body.scope_type == "department" else None
     # naive replace KRs
     for kr in list(okr.key_results):
         db.delete(kr)

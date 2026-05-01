@@ -2,11 +2,12 @@ from datetime import datetime
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
-from app.models import Company
+from app.models import Company, CompanyContext
 from app.schemas import CompanyIn, CompanyOut, CompanyCadenceIn
 from app.security import get_current_company
 from app.services.email_templates import DEFAULTS, all_kinds, get_template, known_variables
@@ -27,6 +28,27 @@ class EmailTemplatesOut(BaseModel):
     templates: dict[str, dict[str, str]]
     defaults: dict[str, dict[str, str]]
     variables: dict[str, list[str]]
+
+
+class CompanyContextIn(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+    scope_type: str = "company"
+    scope_id: str | None = None
+    is_active: bool = True
+
+
+def _context_out(row: CompanyContext) -> dict:
+    return {
+        "id": row.id,
+        "label": row.label,
+        "content": row.content,
+        "scope_type": row.scope_type,
+        "scope_id": row.scope_id,
+        "is_active": row.is_active,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
 
 
 @router.get("", response_model=CompanyOut)
@@ -78,6 +100,79 @@ def complete_onboarding(
     db.refresh(company)
     run_cadence_now(db, company)
     return company
+
+
+@router.get("/context")
+def list_context(
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    rows = list(
+        db.execute(
+            select(CompanyContext)
+            .where(CompanyContext.company_id == company.id)
+            .order_by(CompanyContext.created_at.desc())
+        ).scalars()
+    )
+    return [_context_out(row) for row in rows]
+
+
+@router.post("/context", status_code=201)
+def create_context(
+    body: CompanyContextIn,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> dict:
+    if body.scope_type not in {"company", "department"}:
+        raise HTTPException(400, "scope_type must be company or department")
+    row = CompanyContext(
+        company_id=company.id,
+        label=body.label,
+        content=body.content,
+        scope_type=body.scope_type,
+        scope_id=body.scope_id if body.scope_type == "department" else None,
+        is_active=body.is_active,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _context_out(row)
+
+
+@router.patch("/context/{context_id}")
+def update_context(
+    context_id: int,
+    body: CompanyContextIn,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> dict:
+    row = db.get(CompanyContext, context_id)
+    if not row or row.company_id != company.id:
+        raise HTTPException(404)
+    if body.scope_type not in {"company", "department"}:
+        raise HTTPException(400, "scope_type must be company or department")
+    row.label = body.label
+    row.content = body.content
+    row.scope_type = body.scope_type
+    row.scope_id = body.scope_id if body.scope_type == "department" else None
+    row.is_active = body.is_active
+    db.commit()
+    db.refresh(row)
+    return _context_out(row)
+
+
+@router.delete("/context/{context_id}")
+def delete_context(
+    context_id: int,
+    company: Company = Depends(get_current_company),
+    db: Session = Depends(get_db),
+) -> dict:
+    row = db.get(CompanyContext, context_id)
+    if not row or row.company_id != company.id:
+        raise HTTPException(404)
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/email-templates", response_model=EmailTemplatesOut)

@@ -1,7 +1,9 @@
 "use client";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
+import { api } from "@/lib/api";
 
 type NavItem = { href: string; label: string };
 
@@ -24,6 +26,22 @@ function isActive(pathname: string, href: string) {
 
 export function Sidebar() {
   const pathname = usePathname() || "/dashboard";
+  const [unreadAlerts, setUnreadAlerts] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ id: number }[]>("/alerts?status=unread")
+      .then((rows) => {
+        if (!cancelled) setUnreadAlerts(rows.length);
+      })
+      .catch(() => {
+        if (!cancelled) setUnreadAlerts(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
   return (
     <aside className="fixed inset-y-0 left-0 z-20 flex w-[240px] flex-col border-r border-surface-200 bg-white">
       <div className="flex h-16 items-center border-b border-surface-200 px-5">
@@ -46,7 +64,14 @@ export function Sidebar() {
                       : "text-ink-500 hover:bg-surface-50")
                   }
                 >
-                  {item.label}
+                  <span className="flex items-center justify-between gap-2">
+                    <span>{item.label}</span>
+                    {item.label === "Alerts" && unreadAlerts > 0 && (
+                      <span className="rounded-full bg-danger-500 px-2 py-0.5 text-[11px] font-semibold text-white">
+                        {unreadAlerts}
+                      </span>
+                    )}
+                  </span>
                 </Link>
               </li>
             );

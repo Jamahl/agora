@@ -11,13 +11,18 @@ type Insight = {
   type: InsightType;
   content: string;
   severity: number;
-  employee: { id: number; name: string } | null;
+  employee: { id: number; name: string; department?: string | null } | null;
   interview_id: number | null;
+  similarity?: number;
+  match_reason?: string | null;
 };
 
 type KeyResult = {
   id: number;
   description: string;
+  target_metric?: string | null;
+  current_value?: string | null;
+  feedback?: Insight[];
 };
 
 type Attribution = {
@@ -29,9 +34,13 @@ type Attribution = {
 type OKRDetail = {
   id: number;
   objective: string;
+  scope_type?: string;
+  scope_id?: string | null;
   key_results: KeyResult[];
   insights: Insight[];
   attribution: Attribution[];
+  departments?: { name: string; count: number }[];
+  why?: string;
 };
 
 type Summary = {
@@ -124,6 +133,12 @@ export default function OKRDetailPage() {
         ← OKRs
       </Link>
       <h1 className="mt-4 text-2xl font-semibold">{detail.objective}</h1>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <span className="badge bg-lilac-50 text-lilac-700">
+          {detail.scope_type === "department" ? `Department: ${detail.scope_id}` : "Company OKR"}
+        </span>
+        {detail.why && <span className="text-sm text-ink-500">{detail.why}</span>}
+      </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
@@ -148,11 +163,38 @@ export default function OKRDetailPage() {
             {detail.key_results.length === 0 ? (
               <div className="mt-3 text-sm text-ink-500">No key results defined.</div>
             ) : (
-              <ul className="mt-3 space-y-2">
+              <ul className="mt-3 space-y-4">
                 {detail.key_results.map((k) => (
-                  <li key={k.id} className="flex items-start gap-2 text-sm">
-                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-ink-500" />
-                    <span className="text-ink-700">{k.description}</span>
+                  <li key={k.id} className="rounded-lg border border-surface-200 p-4 text-sm">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-lilac-500" />
+                      <div>
+                        <div className="font-medium text-ink-900">{k.description}</div>
+                        {k.target_metric && <div className="mt-1 text-xs text-ink-500">Target: {k.target_metric}</div>}
+                      </div>
+                    </div>
+                    {k.feedback && k.feedback.length > 0 ? (
+                      <div className="mt-3 space-y-2">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+                          Direct feedback linked to this KR
+                        </div>
+                        {k.feedback.slice(0, 4).map((ins) => (
+                          <Link key={`${k.id}-${ins.id}`} href={`/dashboard/interviews/${ins.interview_id}`} className="block rounded-md bg-lilac-50 p-3 hover:bg-lilac-100">
+                            <div className="flex items-center gap-2">
+                              <span className={`badge ${insightBadgeClass(ins.type)}`}>{formatInsightType(ins.type)}</span>
+                              <span className="text-xs text-ink-500">sev {ins.severity}</span>
+                              {ins.similarity && <span className="text-xs text-lilac-700">{Math.round(ins.similarity * 100)}% match</span>}
+                            </div>
+                            <p className="mt-1 text-ink-700">{ins.content}</p>
+                            {ins.employee && <div className="mt-1 text-xs text-ink-500">— {ins.employee.name}{ins.employee.department ? ` · ${ins.employee.department}` : ""}</div>}
+                          </Link>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-md border border-dashed border-surface-200 p-3 text-xs text-ink-500">
+                        No direct feedback linked to this KR yet. Agora will watch for strong related signals in upcoming interviews.
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -163,7 +205,7 @@ export default function OKRDetailPage() {
             <h2 className="text-lg font-medium">Insights</h2>
             {detail.insights.length === 0 ? (
               <div className="mt-3 text-sm text-ink-500">
-                No insights tagged to this OKR yet — themes appear after your second round.
+                No objective-level feedback yet. Agora will connect relevant notes after interviews complete.
               </div>
             ) : (
               <ul className="mt-3 space-y-3">
@@ -221,6 +263,19 @@ export default function OKRDetailPage() {
               </ul>
             )}
           </div>
+          {detail.departments && detail.departments.length > 0 && (
+            <div className="card">
+              <h2 className="text-lg font-medium">Departments</h2>
+              <ul className="mt-3 space-y-2">
+                {detail.departments.map((d) => (
+                  <li key={`dept-${d.name}`} className="flex items-center justify-between text-sm">
+                    <span>{d.name}</span>
+                    <span className="badge bg-lilac-50 text-lilac-700">{d.count}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -8,20 +8,17 @@ type ReviewItem = {
   id: number;
   content: string;
   type: string;
-  severity: number | string;
+  severity: number;
   created_at: string;
   employee: { id: number; name: string };
-  interview: { id: number; scheduled_at: string };
+  interview: { id: number; scheduled_at?: string | null };
 };
 
-function severityLabel(severity: number | string): string {
-  if (typeof severity === "number") {
-    if (severity >= 4) return "critical";
-    if (severity === 3) return "high";
-    if (severity === 2) return "medium";
-    return "low";
-  }
-  return String(severity || "");
+function severityLabel(severity: number): string {
+  if (severity >= 5) return "critical";
+  if (severity >= 4) return "high";
+  if (severity === 3) return "medium";
+  return "low";
 }
 
 function typeTone(type: string): string {
@@ -38,7 +35,7 @@ function typeTone(type: string): string {
   return "bg-surface-100 text-ink-700";
 }
 
-function severityTone(severity: number | string): string {
+function severityTone(severity: number): string {
   const s = severityLabel(severity).toLowerCase();
   if (s === "high" || s === "critical") return "bg-danger-500/10 text-danger-500";
   if (s === "medium") return "bg-warn-500/10 text-warn-500";
@@ -120,9 +117,9 @@ export default function ReviewQueuePage() {
                       #{item.interview.id}
                     </Link>
                     {" · "}
-                    {formatDistanceToNow(new Date(item.interview.scheduled_at), {
-                      addSuffix: true,
-                    })}
+                    {item.interview.scheduled_at
+                      ? formatDistanceToNow(new Date(item.interview.scheduled_at), { addSuffix: true })
+                      : "date unknown"}
                     {" · flagged "}
                     {formatDistanceToNow(new Date(item.created_at), {
                       addSuffix: true,

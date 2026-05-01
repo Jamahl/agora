@@ -41,6 +41,13 @@ type EmployeeDetail = {
   manager_id: number | null;
   memory_summary: string | null;
   status: "active" | "archived";
+  stats?: {
+    total_interviews: number;
+    completed_interviews: number;
+    pending_interviews: number;
+    average_sentiment: Sentiment | null;
+    last_sentiment: Sentiment | null;
+  };
   interviews: InterviewRow[];
 };
 
@@ -77,6 +84,20 @@ function safeFormatDate(iso: string | null, fallback = "—") {
   } catch {
     return fallback;
   }
+}
+
+function leadershipMemoryText(name: string, text: string | null) {
+  if (!text) return "";
+  return text
+    .replace(/\byou've\b/gi, `${name} has`)
+    .replace(/\byou have\b/gi, `${name} has`)
+    .replace(/\byou're\b/gi, `${name} is`)
+    .replace(/\byou are\b/gi, `${name} is`)
+    .replace(/\byou mentioned\b/gi, `${name} previously mentioned`)
+    .replace(/\byou shared\b/gi, `${name} previously shared`)
+    .replace(/\byou raised\b/gi, `${name} previously raised`)
+    .replace(/\byou\b/gi, name)
+    .replace(/\byour\b/gi, `${name}'s`);
 }
 
 function SentimentTile({ label, value }: { label: string; value: number }) {
@@ -128,6 +149,34 @@ export default function EmployeeDetailPage() {
     const bd = b.ended_at || b.scheduled_at || "";
     return bd.localeCompare(ad);
   });
+  const stats = data.stats || {
+    total_interviews: data.interviews.length,
+    completed_interviews: data.interviews.filter((iv) => iv.status === "completed").length,
+    pending_interviews: data.interviews.filter((iv) => ["scheduled", "in_progress", "no_show"].includes(iv.status)).length,
+    average_sentiment: null,
+    last_sentiment: sortedInterviews.find((iv) => iv.status === "completed")?.sentiment || null,
+  };
+  const latestCompleted = sortedInterviews.find((iv) => iv.status === "completed");
+  const historyInterviews = sortedInterviews.filter(
+    (iv) => iv.status === "completed" && (iv.insight_count > 0 || iv.sentiment)
+  );
+  const latestSignal = latestCompleted
+    ? `${safeFormatDate(latestCompleted.ended_at || latestCompleted.scheduled_at)} · ${latestCompleted.insight_count} ${latestCompleted.insight_count === 1 ? "insight" : "insights"} captured`
+    : "No completed interview signal yet";
+  const recentInsights = historyInterviews.flatMap((iv) =>
+    iv.top_insights.map((ins) => ({ ...ins, interviewId: iv.id }))
+  ).slice(0, 3);
+  const averageScore = stats.average_sentiment
+    ? ((stats.average_sentiment.morale + stats.average_sentiment.energy + stats.average_sentiment.candor + stats.average_sentiment.urgency) / 4).toFixed(1)
+    : null;
+  const managerMemory = leadershipMemoryText(data.name, data.memory_summary);
+  const leadershipOverview = [
+    `${data.name} is ${data.status} ${data.job_title ? `as ${data.job_title}` : "on the team"}${data.department ? ` in ${data.department}` : ""}.`,
+    stats.completed_interviews
+      ? `Agora has ${stats.completed_interviews} completed interview${stats.completed_interviews === 1 ? "" : "s"} to read from${stats.pending_interviews ? `, with ${stats.pending_interviews} pending follow-up${stats.pending_interviews === 1 ? "" : "s"}` : ""}.`
+      : "Agora does not have a completed interview yet, so treat this profile as a scheduling and context view for now.",
+    managerMemory ? `Recent conversation summary: ${managerMemory}` : "",
+  ].filter(Boolean).join(" ");
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
@@ -137,7 +186,12 @@ export default function EmployeeDetailPage() {
 
       <div className="mt-4 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">{data.name}</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold">{data.name}</h1>
+            <span className={`badge ${data.status === "active" ? "bg-ok-500/15 text-ok-500" : "bg-surface-100 text-ink-500"}`}>
+              {data.status}
+            </span>
+          </div>
           <div className="mt-1 text-sm text-ink-500">
             {data.job_title || "—"}
             {data.department && (
@@ -154,26 +208,77 @@ export default function EmployeeDetailPage() {
         </div>
         <div className="flex items-center gap-3">
           <TestInterviewButton employeeId={data.id} />
-          <span className={`badge ${data.status === "active" ? "bg-ok-500/15 text-ok-500" : "bg-surface-100 text-ink-500"}`}>
-            {data.status}
-          </span>
         </div>
       </div>
 
-      {data.memory_summary && (
-        <p className="mt-6 italic text-ink-500">{data.memory_summary}</p>
-      )}
+      <div className="mt-6 grid gap-3 md:grid-cols-4">
+        <div className="rounded-xl border border-lilac-100 bg-white p-4 shadow-sm shadow-lilac-50">
+          <div className="text-xs font-medium uppercase tracking-wide text-ink-500">Completed</div>
+          <div className="mt-1 text-2xl font-semibold text-ink-900">{stats.completed_interviews}</div>
+        </div>
+        <div className="rounded-xl border border-lilac-100 bg-white p-4 shadow-sm shadow-lilac-50">
+          <div className="text-xs font-medium uppercase tracking-wide text-ink-500">Pending</div>
+          <div className="mt-1 text-2xl font-semibold text-ink-900">{stats.pending_interviews}</div>
+        </div>
+        <div className="rounded-xl border border-lilac-100 bg-white p-4 shadow-sm shadow-lilac-50">
+          <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-ink-500">
+            Avg score
+            <span
+              tabIndex={0}
+              className="group relative inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-lilac-50 text-[10px] font-semibold text-lilac-700 ring-1 ring-lilac-100"
+              aria-label="Average score is out of 5. It is the mean of morale, energy, candor, and urgency across completed interviews with sentiment. Higher generally means healthier signal; urgency is included as pressure signal, so interpret it with the detailed scores."
+            >
+              ?
+              <span className="pointer-events-none absolute right-0 top-5 z-20 hidden w-72 rounded-lg border border-surface-200 bg-white p-3 normal-case tracking-normal text-ink-700 shadow-xl group-hover:block group-focus:block">
+                Score is out of 5. It averages morale, energy, candor, and urgency across completed interviews with sentiment. Higher generally means stronger signal, but urgency reflects pressure too, so read it alongside the interview details.
+              </span>
+            </span>
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-ink-900">{averageScore || "—"}</div>
+        </div>
+        <div className="rounded-xl border border-lilac-100 bg-white p-4 shadow-sm shadow-lilac-50">
+          <div className="text-xs font-medium uppercase tracking-wide text-ink-500">Latest signal</div>
+          <div className="mt-1 text-sm font-medium leading-5 text-ink-900">{latestSignal}</div>
+        </div>
+      </div>
+
+      <div className="card mt-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Leadership overview</h2>
+            <p className="mt-1 text-sm text-ink-500">
+              Manager-facing summary of what to know before acting.
+            </p>
+          </div>
+        </div>
+        <p className="mt-4 text-sm leading-6 text-ink-700">{leadershipOverview}</p>
+        {recentInsights.length > 0 && (
+          <div className="mt-4">
+            <div className="label">Recent leadership signals</div>
+            <ul className="mt-2 space-y-2">
+              {recentInsights.map((ins, idx) => (
+                <li key={`${ins.interviewId}-${ins.id || idx}`} className="flex items-start gap-2 text-sm">
+                  <span className={`badge ${insightBadgeClass(ins.type)} shrink-0`}>
+                    {formatInsightType(ins.type)}
+                  </span>
+                  <span className="text-ink-700">{ins.content}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
 
       <PendingInvites employeeId={data.id} employeeName={data.name} />
 
       <h2 className="mt-8 text-lg font-medium">Interview history</h2>
-      {sortedInterviews.length === 0 ? (
+      {historyInterviews.length === 0 ? (
         <div className="card mt-3 text-sm text-ink-500">
-          No interviews yet — the first one runs when the cadence window opens.
+          No completed interviews with signal yet. Scheduled and empty interviews stay out of history.
         </div>
       ) : (
         <div className="mt-3 space-y-4">
-          {sortedInterviews.map((iv) => (
+          {historyInterviews.map((iv) => (
             <div key={iv.id} className="card">
               <div className="flex items-start justify-between">
                 <div>
@@ -207,24 +312,28 @@ export default function EmployeeDetailPage() {
               {iv.top_insights.length > 0 && (
                 <ul className="mt-4 space-y-2">
                   {iv.top_insights.map((ins, i) => {
-                    const sensitive = ins.review_state === "needs_review";
+                    const sensitive = ins.review_state && ins.review_state !== "live";
                     return (
                       <li
-                        key={i}
+                        key={ins.id || `insight-${iv.id}-${i}`}
                         className={
                           sensitive
-                            ? "flex items-start gap-2 rounded-md border-l-4 border-danger-500 bg-danger-500/5 px-3 py-2 text-sm font-semibold"
+                            ? "flex items-start gap-2 rounded-md border-l-4 border-lilac-500 bg-lilac-50 px-3 py-2 text-sm font-semibold"
                             : "flex items-start gap-2 text-sm"
                         }
                       >
                         <span
                           className={`badge ${
                             sensitive
-                              ? "bg-danger-500 text-white"
+                              ? ins.review_state === "needs_review"
+                                ? "bg-danger-500 text-white"
+                                : ins.review_state === "suppressed"
+                                  ? "bg-surface-100 text-ink-500"
+                                  : "bg-lilac-50 text-lilac-700"
                               : insightBadgeClass(ins.type)
                           } shrink-0`}
                         >
-                          {sensitive ? "sensitive · review" : formatInsightType(ins.type)}
+                          {sensitive ? `sensitive · ${ins.review_state === "needs_review" ? "pending" : ins.review_state}` : formatInsightType(ins.type)}
                         </span>
                         <span className={sensitive ? "text-ink-900" : "text-ink-700"}>
                           {ins.content}
@@ -306,16 +415,20 @@ function PendingInvites({ employeeId, employeeName }: { employeeId: number; empl
           className="btn-secondary"
           onClick={scheduleNew}
           disabled={busy === "schedule"}
+          aria-label={`Schedule the next interview for ${employeeName} and send the invite`}
         >
-          {busy === "schedule" ? "Scheduling…" : "Schedule & invite"}
+          {busy === "schedule" ? "Scheduling…" : "Schedule next + send invite"}
         </button>
       </div>
+      <p className="mt-1 text-sm text-ink-500">
+        Schedules the next cadence slot and immediately emails the interview link. Use Resend invite on an existing row if the employee needs it again.
+      </p>
       {error && <div className="mt-2 text-sm text-danger-500">{error}</div>}
       {rows === null ? (
         <div className="mt-3 text-sm text-ink-300">Loading…</div>
       ) : rows.length === 0 ? (
         <div className="card mt-3 text-sm text-ink-500">
-          No pending interviews. Click "Schedule & invite" to queue {employeeName.split(" ")[0]} up.
+          No pending interviews. Schedule the next cadence interview to queue {employeeName.split(" ")[0]} up and send their invite.
         </div>
       ) : (
         <div className="mt-3 space-y-2">
@@ -355,8 +468,9 @@ function PendingInvites({ employeeId, employeeName }: { employeeId: number; empl
                     className={invited ? "btn-ghost" : "btn-primary"}
                     onClick={() => sendInvite(iv.id)}
                     disabled={busy === iv.id}
+                    aria-label={`${invited ? "Resend" : "Send"} invite for ${employeeName}'s ${safeFormatDate(iv.scheduled_at, "scheduled")} interview`}
                   >
-                    {busy === iv.id ? "Sending…" : invited ? "Resend" : "Send invite"}
+                    {busy === iv.id ? "Sending…" : invited ? "Resend invite" : "Send invite"}
                   </button>
                 </div>
               </div>

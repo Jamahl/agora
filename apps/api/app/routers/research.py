@@ -17,8 +17,18 @@ router = APIRouter(prefix="/research", tags=["research"])
 
 
 class PlanEditIn(BaseModel):
-    employees: list[ResearchPlanEmployee]
+    goal: str | None = None
+    research_type: str | None = None
+    audience_mode: str | None = None
+    selected_departments: list[str] | None = None
+    recommended_employees: list[ResearchPlanEmployee] | None = None
+    selected_employees: list[ResearchPlanEmployee] | None = None
+    sample_questions: list[str] | None = None
+    timeline: str | None = None
+    readout_threshold: float | None = None
+    employees: list[ResearchPlanEmployee] | None = None
     eta_days: int | None = None
+    notes: str | None = None
 
 
 def _to_out(rr: ResearchRequest) -> dict:
@@ -98,8 +108,27 @@ def edit_plan(
             )
         ).scalars()
     )
-    emps = [e for e in body.employees if e.employee_id in valid_ids]
+    requested_emps = body.selected_employees or body.employees or []
+    emps = [e for e in requested_emps if e.employee_id in valid_ids]
     existing = rr.plan_json or {}
+    for field in (
+        "goal",
+        "research_type",
+        "audience_mode",
+        "selected_departments",
+        "sample_questions",
+        "timeline",
+        "readout_threshold",
+        "notes",
+    ):
+        value = getattr(body, field)
+        if value is not None:
+            existing[field] = value
+    if body.recommended_employees is not None:
+        existing["recommended_employees"] = [
+            e.model_dump() for e in body.recommended_employees if e.employee_id in valid_ids
+        ]
+    existing["selected_employees"] = [e.model_dump() for e in emps]
     existing["employees"] = [e.model_dump() for e in emps]
     if body.eta_days is not None:
         existing["eta_days"] = body.eta_days
@@ -120,7 +149,7 @@ def approve(
     if rr.status != "draft":
         raise HTTPException(409, f"Cannot approve from status {rr.status}")
     plan = rr.plan_json or {}
-    for entry in plan.get("employees", []):
+    for entry in plan.get("selected_employees") or plan.get("employees", []):
         emp = db.get(Employee, entry.get("employee_id"))
         if not emp or emp.company_id != company.id or emp.status != "active":
             continue
