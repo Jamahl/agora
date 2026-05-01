@@ -12,6 +12,8 @@ type Okr = {
   wins: number;
   color: "red" | "amber" | "green" | "gray";
   score: number;
+  recency_label?: string;
+  why?: string;
 };
 
 function colorClass(color: Okr["color"]) {
@@ -84,9 +86,11 @@ export function OkrHealth() {
                     <div className="mt-1 text-xs text-ink-500">
                       {o.volume} mentions · {o.blockers} blockers · {o.wins} wins
                     </div>
+                    {o.why && <div className="mt-1 text-xs text-lilac-700">{o.why}</div>}
                   </div>
                   <div className="text-right text-sm tabular-nums text-ink-500">
                     {o.avg_severity.toFixed(1)}
+                    {o.recency_label && <div className="mt-1 text-[11px] text-ink-500">{o.recency_label}</div>}
                   </div>
                 </Link>
               </li>

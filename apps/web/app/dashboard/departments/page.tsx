@@ -38,9 +38,9 @@ export default function DepartmentsPage() {
         <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {rows.map((d) => (
             <Link
-              key={d.name}
+              key={`dept-${d.name}`}
               href={`/dashboard/departments/${encodeURIComponent(d.name)}`}
-              className="card transition-colors hover:border-ink-300"
+              className="card transition-colors hover:border-lilac-200"
             >
               <div className="text-base font-medium text-ink-900">{d.name}</div>
               <div className="mt-1 text-sm text-ink-500">

@@ -15,12 +15,15 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 @router.get("")
 def list_alerts(
     status: str | None = "unread",
+    interview_id: int | None = None,
     company: Company = Depends(get_current_company),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     q = select(AdminAlert).where(AdminAlert.company_id == company.id)
     if status:
         q = q.where(AdminAlert.status == status)
+    if interview_id:
+        q = q.where(AdminAlert.interview_id == interview_id)
     q = q.order_by(AdminAlert.created_at.desc())
     return [
         {
@@ -30,6 +33,7 @@ def list_alerts(
             "interview_id": a.interview_id,
             "status": a.status,
             "created_at": a.created_at,
+            "acknowledged_at": a.acknowledged_at,
         }
         for a in db.execute(q).scalars()
     ]

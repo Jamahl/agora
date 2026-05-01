@@ -80,6 +80,8 @@ class OKR(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("company.id", ondelete="CASCADE"))
     objective: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="active")
+    scope_type: Mapped[str] = mapped_column(String(32), default="company")
+    scope_id: Mapped[Optional[str]] = mapped_column(String(200))
     embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(EMBED_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -168,6 +170,18 @@ class InsightOkrTag(Base):
     similarity: Mapped[float] = mapped_column(Float)
 
 
+class InsightKeyResultTag(Base):
+    __tablename__ = "insight_key_result_tag"
+    insight_id: Mapped[int] = mapped_column(
+        ForeignKey("insight.id", ondelete="CASCADE"), primary_key=True
+    )
+    key_result_id: Mapped[int] = mapped_column(
+        ForeignKey("key_result.id", ondelete="CASCADE"), primary_key=True
+    )
+    similarity: Mapped[float] = mapped_column(Float)
+    match_reason: Mapped[Optional[str]] = mapped_column(Text)
+
+
 class InterviewSentiment(Base):
     __tablename__ = "interview_sentiment"
     interview_id: Mapped[int] = mapped_column(
@@ -204,6 +218,21 @@ class AdminAlert(Base):
     acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
+class CompanyContext(Base):
+    __tablename__ = "company_context"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("company.id", ondelete="CASCADE"))
+    label: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    scope_type: Mapped[str] = mapped_column(String(32), default="company")
+    scope_id: Mapped[Optional[str]] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class NotionPage(Base):
     __tablename__ = "notion_page"
     __table_args__ = (
@@ -223,9 +252,24 @@ class ChatMessage(Base):
     __tablename__ = "chat_message"
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("company.id", ondelete="CASCADE"))
+    session_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("chat_session.id", ondelete="SET NULL")
+    )
     scope_type: Mapped[Optional[str]] = mapped_column(String(32))
     scope_id: Mapped[Optional[str]] = mapped_column(String(100))
     role: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
     citations_json: Mapped[Optional[list[dict]]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChatSession(Base):
+    __tablename__ = "chat_session"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("company.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(200))
+    context_mode: Mapped[str] = mapped_column(String(32), default="all")
+    scope_type: Mapped[Optional[str]] = mapped_column(String(32))
+    scope_id: Mapped[Optional[str]] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

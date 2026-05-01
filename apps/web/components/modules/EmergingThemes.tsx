@@ -60,12 +60,15 @@ export function EmergingThemes() {
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium text-ink-900">{t.label}</div>
                     {t.summary && (
-                      <div className="mt-1 line-clamp-2 text-xs text-ink-500">
+                      <div className="mt-1 text-xs text-ink-500">
                         {t.summary}
                       </div>
                     )}
                     <div className="mt-1 text-xs text-ink-500">
                       {formatDistanceToNow(new Date(t.created_at), { addSuffix: true })}
+                    </div>
+                    <div className="mt-1 text-xs text-lilac-700">
+                      Surfaced after enough repeated signal clustered across interviews.
                     </div>
                   </div>
                   <span className="badge bg-surface-100 text-ink-500 shrink-0">

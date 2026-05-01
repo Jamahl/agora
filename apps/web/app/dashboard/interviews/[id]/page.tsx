@@ -44,6 +44,16 @@ type Interview = {
   status: string;
   cleaned_transcript: Transcript | null;
   corrected_summary: string | null;
+  sensitive_omitted?: string[];
+  employee?: EmployeeLite | null;
+  alerts?: {
+    id: number;
+    category: string;
+    summary: string;
+    status: string;
+    created_at: string;
+    acknowledged_at?: string | null;
+  }[];
   insights: Insight[];
   sentiment: Sentiment | null;
 };
@@ -77,6 +87,13 @@ function severityClass(s: number) {
 
 function formatInsightType(type: string) {
   return type.replace(/_/g, " ");
+}
+
+function sensitiveBadge(reviewState: string | null, acknowledged: boolean) {
+  if (acknowledged) return "bg-lilac-50 text-lilac-700";
+  if (reviewState === "needs_review") return "bg-danger-500 text-white";
+  if (reviewState === "suppressed") return "bg-surface-100 text-ink-500";
+  return "bg-ok-500/10 text-ok-500";
 }
 
 function safeFormatDate(iso: string | null) {
@@ -121,6 +138,7 @@ export default function InterviewDetailPage() {
       try {
         const res = await api<Interview>(`/interviews/${id}`);
         setInterview(res);
+        if (res.employee) setEmployee({ id: res.employee.id, name: res.employee.name });
         if (res?.employee_id) {
           try {
             const emp = await api<EmployeeLite>(`/dashboard/employees/${res.employee_id}`);
@@ -149,6 +167,10 @@ export default function InterviewDetailPage() {
   }
 
   const segments = interview.cleaned_transcript?.segments || [];
+  const alerts = interview.alerts || [];
+  const acknowledged = alerts.some((a) => a.status === "acknowledged");
+  const sensitiveInsights = interview.insights.filter((ins) => ins.review_state && ins.review_state !== "live");
+  const omitted = interview.sensitive_omitted || [];
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
@@ -203,6 +225,59 @@ export default function InterviewDetailPage() {
         </div>
       )}
 
+      {(alerts.length > 0 || sensitiveInsights.length > 0 || omitted.length > 0) && (
+        <div className="card mt-6 border-lilac-200 bg-lilac-50">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-medium">Sensitive handling</h2>
+              <p className="mt-1 text-sm text-ink-600">
+                Agora separated sensitive material from normal dashboard intelligence.
+              </p>
+            </div>
+            {acknowledged ? (
+              <span className="badge bg-lilac-100 text-lilac-700">Sensitive — reviewed</span>
+            ) : sensitiveInsights.some((i) => i.review_state === "needs_review") ? (
+              <Link href="/dashboard/review" className="badge bg-danger-500 text-white">Sensitive — pending review</Link>
+            ) : null}
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg bg-white p-3 text-sm">
+              <div className="font-medium text-ink-900">{omitted.length} omitted topic{omitted.length === 1 ? "" : "s"}</div>
+              <div className="mt-1 text-xs text-ink-500">{omitted.length ? omitted.join(", ") : "None"}</div>
+            </div>
+            <div className="rounded-lg bg-white p-3 text-sm">
+              <div className="font-medium text-ink-900">{sensitiveInsights.length} review item{sensitiveInsights.length === 1 ? "" : "s"}</div>
+              <div className="mt-1 text-xs text-ink-500">
+                {sensitiveInsights.filter((i) => i.review_state === "needs_review").length} pending
+              </div>
+            </div>
+            <div className="rounded-lg bg-white p-3 text-sm">
+              <div className="font-medium text-ink-900">{alerts.length} linked alert{alerts.length === 1 ? "" : "s"}</div>
+              <div className="mt-1 text-xs text-ink-500">
+                {acknowledged
+                  ? `Acknowledged by admin${alerts.find((a) => a.acknowledged_at)?.acknowledged_at ? ` ${safeFormatDate(alerts.find((a) => a.acknowledged_at)?.acknowledged_at || null)}` : ""}`
+                  : alerts.length ? "Unread" : "None"}
+              </div>
+            </div>
+          </div>
+          {alerts.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {alerts.map((alert) => (
+                <Link key={alert.id} href="/dashboard/alerts" className="block rounded-lg bg-white p-3 text-sm hover:bg-surface-50">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium capitalize">{alert.category.replace(/_/g, " ")}</span>
+                    <span className={`badge ${alert.status === "acknowledged" ? "bg-lilac-50 text-lilac-700" : "bg-danger-500/10 text-danger-500"}`}>
+                      {alert.status === "acknowledged" ? "Reviewed" : "Unread"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-ink-700">{alert.summary}</p>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mt-6">
         <h2 className="text-lg font-medium">
           Insights
@@ -216,13 +291,13 @@ export default function InterviewDetailPage() {
           <div className="card mt-3">
             <ul className="space-y-3">
               {interview.insights.map((ins) => {
-                const sensitive = ins.review_state === "needs_review";
+                const sensitive = ins.review_state && ins.review_state !== "live";
                 return (
                   <li
                     key={ins.id}
                     className={
                       sensitive
-                        ? "-mx-4 rounded-md border-l-4 border-danger-500 bg-danger-500/5 px-4 py-3"
+                        ? "-mx-4 rounded-md border-l-4 border-lilac-500 bg-lilac-50 px-4 py-3"
                         : "border-b border-surface-100 pb-3 last:border-0 last:pb-0"
                     }
                   >
@@ -230,11 +305,17 @@ export default function InterviewDetailPage() {
                       <span
                         className={`badge shrink-0 ${
                           sensitive
-                            ? "bg-danger-500 text-white"
+                            ? sensitiveBadge(ins.review_state, acknowledged)
                             : insightBadgeClass(ins.type)
                         }`}
                       >
-                        {sensitive ? "sensitive · pending review" : formatInsightType(ins.type)}
+                        {sensitive
+                          ? acknowledged
+                            ? "Sensitive — reviewed"
+                            : ins.review_state === "suppressed"
+                              ? "Sensitive — suppressed"
+                              : "Sensitive — pending review"
+                          : formatInsightType(ins.type)}
                       </span>
                       <p className={sensitive ? "text-sm font-semibold text-ink-900" : "text-sm text-ink-700"}>
                         {ins.content}
@@ -249,9 +330,10 @@ export default function InterviewDetailPage() {
                       </blockquote>
                     )}
                     {sensitive && (
-                      <div className="mt-2 text-xs text-danger-500">
-                        This item was flagged during the interview. It will not appear in dashboards
-                        until you approve it in the Review queue.
+                      <div className="mt-2 text-xs text-ink-500">
+                        {acknowledged
+                          ? "A linked alert has been acknowledged by admin. This remains marked for traceability."
+                          : "This item will not appear in dashboards until approved in the Review queue."}
                       </div>
                     )}
                   </li>
@@ -277,7 +359,7 @@ export default function InterviewDetailPage() {
           ) : (
             <div className="mt-4 space-y-3">
               {segments.map((seg, i) => (
-                <div key={i} className="text-sm">
+                <div key={`segment-${i}-${seg.speaker}-${formatTs(seg.ts)}`} className="text-sm">
                   <div className="flex items-baseline gap-2">
                     <span className="font-medium text-ink-900">{seg.speaker}</span>
                     {seg.ts !== null && seg.ts !== undefined && seg.ts !== "" && (

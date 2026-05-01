@@ -2,7 +2,6 @@
 import type { ReactNode } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatDock } from "@/components/ChatDock";
-import { AlertsBanner } from "@/components/AlertsBanner";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
@@ -10,7 +9,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <Sidebar />
       <div className="flex pl-[240px]">
         <main className="min-h-screen flex-1 px-8 py-8">
-          <AlertsBanner />
           {children}
         </main>
         <ChatDock />

@@ -10,9 +10,11 @@ from app.logging_conf import log
 from app.models import (
     Employee,
     Insight,
+    InsightKeyResultTag,
     InsightOkrTag,
     Interview,
     InterviewSentiment,
+    KeyResult,
     OKR,
 )
 
@@ -202,17 +204,46 @@ def run_synthesis(db: Session, interview_id: int) -> None:
         db.execute(select(OKR).where(OKR.company_id == iv.company_id, OKR.status == "active")).scalars()
     )
     okr_embs = [(o.id, o.embedding) for o in okrs if o.embedding is not None]
+    kr_rows = list(
+        db.execute(
+            select(KeyResult, OKR)
+            .join(OKR, OKR.id == KeyResult.okr_id)
+            .where(OKR.company_id == iv.company_id, OKR.status == "active")
+        ).all()
+    )
+    kr_threshold = max(threshold + 0.10, 0.65)
+    kr_embs = [
+        (kr.id, kr.description, kr.embedding)
+        for kr, _okr in kr_rows
+        if kr.embedding is not None
+    ]
     for row in insight_rows:
-        if row.embedding is None or not okr_embs:
+        if row.embedding is None or (not okr_embs and not kr_embs):
             continue
-        ranked = sorted(
-            ((oid, _cos(row.embedding, oe)) for oid, oe in okr_embs),
-            key=lambda x: x[1],
+        if okr_embs:
+            ranked = sorted(
+                ((oid, _cos(row.embedding, oe)) for oid, oe in okr_embs),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            for oid, sim in ranked[:3]:
+                if sim >= threshold:
+                    db.add(InsightOkrTag(insight_id=row.id, okr_id=oid, similarity=float(sim)))
+        kr_ranked = sorted(
+            ((kid, desc, _cos(row.embedding, emb)) for kid, desc, emb in kr_embs),
+            key=lambda x: x[2],
             reverse=True,
         )
-        for oid, sim in ranked[:3]:
-            if sim >= threshold:
-                db.add(InsightOkrTag(insight_id=row.id, okr_id=oid, similarity=float(sim)))
+        for kid, desc, sim in kr_ranked[:2]:
+            if sim >= kr_threshold:
+                db.add(
+                    InsightKeyResultTag(
+                        insight_id=row.id,
+                        key_result_id=kid,
+                        similarity=float(sim),
+                        match_reason=f"Strong semantic match to KR: {desc[:160]}",
+                    )
+                )
 
     # Memory rollup
     recent = list(

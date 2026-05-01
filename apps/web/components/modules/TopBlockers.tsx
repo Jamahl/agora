@@ -12,6 +12,8 @@ type Blocker = {
   severity: number;
   score: number;
   created_at: string;
+  recency_label?: string;
+  why?: string;
 };
 
 function severityBadge(severity: number) {
@@ -82,8 +84,12 @@ export function TopBlockers() {
                       {b.content}
                     </Link>
                     <div className="mt-1 text-xs text-ink-500">
-                      {formatDistanceToNow(new Date(b.created_at), { addSuffix: true })}
+                      {b.recency_label || formatDistanceToNow(new Date(b.created_at), { addSuffix: true })}
                     </div>
+                    {b.why && <div className="mt-1 text-xs text-lilac-700">{b.why}</div>}
+                    <Link href={`/dashboard/interviews/${b.interview_id}`} className="mt-2 inline-flex text-xs font-medium text-lilac-700 hover:underline">
+                      Ask Agora about this
+                    </Link>
                   </div>
                 </div>
               </li>

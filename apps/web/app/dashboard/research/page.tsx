@@ -88,12 +88,12 @@ export default function ResearchListPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold">Research</h1>
         <p className="mt-1 text-sm text-ink-500">
-          Ask a question. Agora drafts an interview plan, runs the conversations, and reports back with findings.
+          Ask Agora to investigate a business question. Nothing is sent until you launch the brief.
         </p>
       </div>
 
       <div className="card mb-8">
-        <label className="label" htmlFor="question">Ask a research question</label>
+        <label className="label" htmlFor="question">What do you want to learn?</label>
         <textarea
           id="question"
           className="input min-h-[90px]"
@@ -104,14 +104,10 @@ export default function ResearchListPage() {
         />
         <div className="mt-3 flex items-center justify-between">
           <div className="text-xs text-ink-500">
-            We'll draft a plan first. Nothing sent to employees until you approve.
+            Step 1: Agora drafts a brief. Step 2: you review who to talk to. Step 3: launch.
           </div>
-          <button
-            className="btn-primary"
-            disabled={!question.trim() || submitting}
-            onClick={submit}
-          >
-            {submitting ? "Drafting plan…" : "Draft a plan"}
+          <button className="btn-primary" disabled={!question.trim() || submitting} onClick={submit}>
+            {submitting ? "Drafting brief…" : "Draft research brief"}
           </button>
         </div>
         {error && <div className="mt-3 text-sm text-danger-500">{error}</div>}
@@ -130,7 +126,7 @@ export default function ResearchListPage() {
         <div className="card text-center">
           <div className="text-ink-700 font-medium">No research yet</div>
           <div className="mt-1 text-sm text-ink-500">
-            Ask your first question above. Plans are drafts until you approve.
+            Ask your first question above. Briefs are drafts until you launch them.
           </div>
         </div>
       ) : (

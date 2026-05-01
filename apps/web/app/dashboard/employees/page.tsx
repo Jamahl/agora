@@ -156,6 +156,9 @@ export default function EmployeesPage() {
                     </span>
                   </td>
                   <td className="px-5 py-3 text-right">
+                    <Link className="mr-1 rounded-md bg-lilac-50 px-3 py-1.5 text-sm font-medium text-lilac-700 ring-1 ring-lilac-100 hover:bg-lilac-100" href={`/dashboard/employees/${r.id}`}>
+                      View
+                    </Link>
                     <button className="btn-ghost" onClick={() => openEdit(r)}>Edit</button>
                     {r.status === "active" ? (
                       <button className="btn-ghost text-danger-500" onClick={() => archive(r.id)}>Archive</button>
@@ -203,7 +206,7 @@ function EmployeeModal({
   const [error, setError] = useState<string | null>(null);
   const [archivedMatch, setArchivedMatch] = useState<{ id: number; name: string; email: string } | null>(null);
 
-  const parseConflict = (msg: string): { code?: string; employee_id?: number; name?: string; email?: string } | null => {
+  const parseConflict = (msg: string): { code?: string; employee_id?: number; name?: string; email?: string; message?: string } | null => {
     const firstColon = msg.indexOf(":");
     const payload = firstColon >= 0 ? msg.slice(firstColon + 1).trim() : msg;
     try {

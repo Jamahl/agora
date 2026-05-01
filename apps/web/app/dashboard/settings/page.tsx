@@ -18,20 +18,54 @@ type Company = {
 type NotionStatus = { connected: boolean; active?: boolean; page_count?: number };
 type GmailStatus = { connected: boolean; active?: boolean; admin_email?: string | null };
 type NotionPage = Record<string, any>;
+type ContextBlock = {
+  id: number;
+  label: string;
+  content: string;
+  scope_type: "company" | "department";
+  scope_id?: string | null;
+  is_active: boolean;
+};
+
+const SETTINGS_SECTIONS = [
+  { id: "profile", label: "Profile" },
+  { id: "cadence", label: "Cadence" },
+  { id: "context", label: "Context" },
+  { id: "research", label: "Research" },
+  { id: "integrations", label: "Integrations" },
+  { id: "email-templates", label: "Email templates" },
+];
 
 export default function SettingsPage() {
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8 space-y-6">
+    <div className="mx-auto max-w-4xl px-6 py-8">
       <div>
         <h1 className="text-2xl font-semibold">Settings</h1>
         <p className="mt-1 text-sm text-ink-500">
           Company profile, interview cadence, and integrations.
         </p>
       </div>
-      <ProfileSection />
-      <CadenceSection />
-      <IntegrationsSection />
-      <EmailTemplatesSection />
+      <nav className="sticky top-0 z-20 mt-5 overflow-x-auto border-y border-lilac-100 bg-white/95 py-3 backdrop-blur">
+        <div className="flex min-w-max gap-2">
+          {SETTINGS_SECTIONS.map((section) => (
+            <a
+              key={section.id}
+              href={`#${section.id}`}
+              className="rounded-full border border-lilac-100 bg-lilac-50 px-3 py-1.5 text-sm font-medium text-lilac-700 hover:bg-lilac-100"
+            >
+              {section.label}
+            </a>
+          ))}
+        </div>
+      </nav>
+      <div className="mt-6 space-y-6">
+        <section id="profile" className="scroll-mt-24"><ProfileSection /></section>
+        <section id="cadence" className="scroll-mt-24"><CadenceSection /></section>
+        <section id="context" className="scroll-mt-24"><ContextSection /></section>
+        <section id="research" className="scroll-mt-24"><ResearchStylesSection /></section>
+        <section id="integrations" className="scroll-mt-24"><IntegrationsSection /></section>
+        <section id="email-templates" className="scroll-mt-24"><EmailTemplatesSection /></section>
+      </div>
     </div>
   );
 }
@@ -44,6 +78,277 @@ const TEMPLATE_LABELS: Record<string, string> = {
   research_ready: "Research report ready",
 };
 
+const RESEARCH_STYLES = [
+  {
+    key: "root_cause",
+    label: "Root cause",
+    intent: "Find why an issue is happening and what conditions are creating it.",
+    agentBehavior: "The agent asks for examples, causes, trade-offs, and what would change the outcome.",
+  },
+  {
+    key: "pulse_check",
+    label: "Pulse check",
+    intent: "Get a broad read on how a group feels right now.",
+    agentBehavior: "The agent samples sentiment, confidence, energy, and recent shifts without over-indexing on one event.",
+  },
+  {
+    key: "decision_support",
+    label: "Decision support",
+    intent: "Collect evidence leadership needs before choosing a direction.",
+    agentBehavior: "The agent probes risks, constraints, likely impact, and what evidence would make the decision clearer.",
+  },
+  {
+    key: "idea_discovery",
+    label: "Idea discovery",
+    intent: "Surface suggestions, alternatives, and unexplored options.",
+    agentBehavior: "The agent invites concrete ideas, compares options, and asks what the team would try first.",
+  },
+  {
+    key: "follow_up",
+    label: "Follow-up",
+    intent: "Check whether a known issue has changed since prior signal.",
+    agentBehavior: "The agent references the follow-up goal, asks what improved or regressed, and looks for proof.",
+  },
+];
+
+const VARIABLE_CHIP_CLASS = "rounded bg-amber-50 px-1.5 py-0.5 font-medium text-ink-900 ring-1 ring-amber-200";
+
+function decodeHtml(value: string): string {
+  if (typeof window === "undefined") return value;
+  const el = document.createElement("textarea");
+  el.innerHTML = value;
+  return el.value;
+}
+
+function htmlToEmailText(html: string): string {
+  if (!html) return "";
+  if (typeof window === "undefined") return html;
+  const normalized = html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/div>/gi, "\n\n")
+    .replace(/<li[^>]*>/gi, "- ")
+    .replace(/<\/li>/gi, "\n");
+  const doc = new DOMParser().parseFromString(normalized, "text/html");
+  return decodeHtml((doc.body.textContent || "").replace(/\n{3,}/g, "\n\n").trim());
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function linkify(text: string): string {
+  return escapeHtml(text).replace(
+    /(https?:\/\/[^\s<]+)/g,
+    '<a href="$1" style="color:#7A4FA8;text-decoration:underline;">$1</a>'
+  );
+}
+
+function emailTextToHtml(text: string): string {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks: string[] = [];
+  let bullets: string[] = [];
+  const flushBullets = () => {
+    if (!bullets.length) return;
+    blocks.push(`<ul>${bullets.map((b) => `<li>${linkify(b)}</li>`).join("")}</ul>`);
+    bullets = [];
+  };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushBullets();
+      continue;
+    }
+    const bullet = trimmed.match(/^[-*•]\s+(.+)$/);
+    if (bullet) {
+      bullets.push(bullet[1]);
+      continue;
+    }
+    flushBullets();
+    blocks.push(`<p>${linkify(trimmed)}</p>`);
+  }
+  flushBullets();
+  return `<div style="font-family:Inter,Arial,sans-serif;max-width:560px;color:#0B0D10;">${blocks.join("\n")}</div>`;
+}
+
+const EMPTY_CONTEXT = {
+  label: "",
+  content: "",
+  scope_type: "company" as const,
+  scope_id: "",
+  is_active: true,
+};
+
+type ContextEdit = {
+  id?: number;
+  label: string;
+  content: string;
+  scope_type: "company" | "department";
+  scope_id?: string | null;
+  is_active: boolean;
+};
+
+function ResearchStylesSection() {
+  return (
+    <div className="card">
+      <h2 className="text-lg font-semibold">Research styles</h2>
+      <p className="mt-1 text-sm text-ink-500">
+        Research style is chosen per brief. It changes how the interview agent frames follow-ups once that research round is launched.
+      </p>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {RESEARCH_STYLES.map((style) => (
+          <div key={style.key} className="rounded-lg border border-lilac-100 bg-lilac-50 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-medium text-ink-900">{style.label}</div>
+              <code className="rounded bg-white px-1.5 py-0.5 text-xs text-lilac-700">
+                {style.key}
+              </code>
+            </div>
+            <p className="mt-2 text-sm text-ink-700">{style.intent}</p>
+            <p className="mt-2 text-xs leading-relaxed text-ink-500">{style.agentBehavior}</p>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 rounded-md border border-surface-200 bg-white p-3 text-xs text-ink-500">
+        When a launched research interview starts, Agora passes the brief goal, style, and sample questions into the Retell agent as research context.
+      </div>
+    </div>
+  );
+}
+
+function ContextSection() {
+  const [blocks, setBlocks] = useState<ContextBlock[]>([]);
+  const [editing, setEditing] = useState<ContextEdit>(EMPTY_CONTEXT);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      setBlocks(await api<ContextBlock[]>("/admin/company/context"));
+    } catch (e: any) {
+      setError(e?.message || "Failed to load context");
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const save = async () => {
+    if (!editing.label.trim() || !editing.content.trim()) return;
+    setSaving(true);
+    setError(null);
+    const payload = {
+      label: editing.label.trim(),
+      content: editing.content.trim(),
+      scope_type: editing.scope_type,
+      scope_id: editing.scope_type === "department" ? editing.scope_id?.trim() || null : null,
+      is_active: editing.is_active,
+    };
+    try {
+      await api(`/admin/company/context${editing.id ? `/${editing.id}` : ""}`, {
+        method: editing.id ? "PATCH" : "POST",
+        body: JSON.stringify(payload),
+      });
+      setEditing(EMPTY_CONTEXT);
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggle = async (block: ContextBlock) => {
+    await api(`/admin/company/context/${block.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...block, is_active: !block.is_active }),
+    });
+    await load();
+  };
+
+  const remove = async (block: ContextBlock) => {
+    if (!confirm(`Delete "${block.label}"?`)) return;
+    await api(`/admin/company/context/${block.id}`, { method: "DELETE" });
+    await load();
+  };
+
+  return (
+    <div className="card">
+      <h2 className="text-lg font-semibold">Context</h2>
+      <p className="mt-1 text-sm text-ink-500">
+        Current priorities, announcements, or org changes Agora should use to guide interview follow-ups.
+      </p>
+      <div className="mt-4 space-y-3">
+        {blocks.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-lilac-200 bg-lilac-50 p-4 text-sm text-ink-600">
+            No context blocks yet. Add one for Q2 priorities, a reorg, or cultural values.
+          </div>
+        ) : (
+          blocks.map((block) => (
+            <div key={block.id} className="rounded-lg border border-surface-200 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium text-ink-900">{block.label}</div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-xs text-ink-500">
+                    <span className="badge bg-lilac-50 text-lilac-700">
+                      {block.scope_type === "department" ? `Department: ${block.scope_id}` : "Company-wide"}
+                    </span>
+                    <span className={`badge ${block.is_active ? "bg-ok-500/10 text-ok-500" : "bg-surface-100 text-ink-500"}`}>
+                      {block.is_active ? "Active" : "Paused"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-ink-700">{block.content}</p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button className="btn-ghost text-xs" onClick={() => setEditing({ ...block, scope_id: block.scope_id || "" })}>Edit</button>
+                  <button className="btn-secondary text-xs" onClick={() => toggle(block)}>{block.is_active ? "Pause" : "Activate"}</button>
+                  <button className="btn-danger text-xs" onClick={() => remove(block)}>Delete</button>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="mt-5 rounded-lg border border-lilac-100 bg-lilac-50 p-4">
+        <div className="mb-3 font-medium">{editing.id ? "Edit context block" : "Add context block"}</div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Label</label>
+            <input className="input" value={editing.label} onChange={(e) => setEditing({ ...editing, label: e.target.value })} placeholder="Q2 priorities" />
+          </div>
+          <div>
+            <label className="label">Scope</label>
+            <select className="input" value={editing.scope_type} onChange={(e) => setEditing({ ...editing, scope_type: e.target.value as "company" | "department" })}>
+              <option value="company">Company-wide</option>
+              <option value="department">Department</option>
+            </select>
+          </div>
+          {editing.scope_type === "department" && (
+            <div className="col-span-2">
+              <label className="label">Department name</label>
+              <input className="input" value={editing.scope_id || ""} onChange={(e) => setEditing({ ...editing, scope_id: e.target.value })} placeholder="Engineering" />
+            </div>
+          )}
+          <div className="col-span-2">
+            <label className="label">Content</label>
+            <textarea className="input min-h-[120px]" value={editing.content} onChange={(e) => setEditing({ ...editing, content: e.target.value })} placeholder="What should Agora know before the next interview round?" />
+          </div>
+        </div>
+        {error && <div className="mt-3 text-sm text-danger-500">{error}</div>}
+        <div className="mt-4 flex items-center gap-2">
+          <button className="btn-primary" disabled={saving || !editing.label.trim() || !editing.content.trim()} onClick={save}>{saving ? "Saving…" : editing.id ? "Save context" : "Add context block"}</button>
+          {editing.id && <button className="btn-secondary" onClick={() => setEditing(EMPTY_CONTEXT)}>Cancel edit</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type TemplateBundleOut = {
   templates: Record<string, { subject: string; body_html: string }>;
   defaults: Record<string, { subject: string; body_html: string }>;
@@ -53,6 +358,7 @@ type TemplateBundleOut = {
 function EmailTemplatesSection() {
   const [data, setData] = useState<TemplateBundleOut | null>(null);
   const [editing, setEditing] = useState<Record<string, { subject: string; body_html: string }>>({});
+  const [activeKind, setActiveKind] = useState("invite");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -109,74 +415,99 @@ function EmailTemplatesSection() {
   }
 
   const kinds = Object.keys(data.templates);
+  const selectedKind = kinds.includes(activeKind) ? activeKind : kinds[0];
+  const current = editing[selectedKind] || data.templates[selectedKind];
+  const vars = data.variables[selectedKind] || [];
+  const emailText = htmlToEmailText(current.body_html);
+  const isDirty =
+    current.subject !== data.templates[selectedKind].subject ||
+    current.body_html !== data.templates[selectedKind].body_html;
   return (
     <div className="card">
       <h2 className="text-lg font-semibold">Email templates</h2>
       <p className="mt-1 text-sm text-ink-500">
-        Edit what Agora sends. Use <code className="rounded bg-surface-100 px-1">{"{{variable}}"}</code> tokens — the list next to each template shows what's available.
+        Pick one template, edit one clear message view, then save all changes together. Agora handles line breaks, bullets, and links.
       </p>
 
-      <div className="mt-4 space-y-6">
-        {kinds.map((kind) => {
-          const current = editing[kind] || data.templates[kind];
-          const vars = data.variables[kind] || [];
-          const isDirty =
-            current.subject !== data.templates[kind].subject ||
-            current.body_html !== data.templates[kind].body_html;
-          return (
-            <div key={kind} className="rounded-lg border border-surface-200 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-medium">{TEMPLATE_LABELS[kind] || kind}</div>
-                  <div className="mt-0.5 text-xs text-ink-500">
-                    Variables:{" "}
-                    {vars.map((v) => (
-                      <code key={v} className="mr-1 rounded bg-surface-100 px-1">
-                        {"{{" + v + "}}"}
-                      </code>
-                    ))}
-                  </div>
-                </div>
-                <button className="btn-ghost text-xs" onClick={() => reset(kind)}>
-                  Reset to default
-                </button>
-              </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
+        <div className="space-y-2">
+          {kinds.map((kind) => {
+            const row = editing[kind] || data.templates[kind];
+            const dirty =
+              row.subject !== data.templates[kind].subject ||
+              row.body_html !== data.templates[kind].body_html;
+            return (
+              <button
+                key={kind}
+                className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
+                  selectedKind === kind
+                    ? "border-lilac-200 bg-lilac-50 text-lilac-700"
+                    : "border-surface-200 bg-white text-ink-700 hover:bg-surface-50"
+                }`}
+                onClick={() => setActiveKind(kind)}
+              >
+                <span className="font-medium">{TEMPLATE_LABELS[kind] || kind}</span>
+                {dirty && <span className="ml-2 text-xs text-warn-500">edited</span>}
+              </button>
+            );
+          })}
+        </div>
 
-              <div className="mt-3 space-y-2">
-                <div>
-                  <label className="label">Subject</label>
-                  <input
-                    className="input"
-                    value={current.subject}
-                    onChange={(e) =>
-                      setEditing({
-                        ...editing,
-                        [kind]: { ...current, subject: e.target.value },
-                      })
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="label">Body (HTML)</label>
-                  <textarea
-                    className="input min-h-[180px] font-mono text-xs"
-                    value={current.body_html}
-                    onChange={(e) =>
-                      setEditing({
-                        ...editing,
-                        [kind]: { ...current, body_html: e.target.value },
-                      })
-                    }
-                  />
-                </div>
-                {isDirty && (
-                  <div className="text-xs text-warn-500">Unsaved changes</div>
-                )}
+        <div className="rounded-lg border border-surface-200 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-medium">{TEMPLATE_LABELS[selectedKind] || selectedKind}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-ink-500">
+                Variables:{" "}
+                {vars.map((v, idx) => (
+                  <code key={`${selectedKind}-${v}-${idx}`} className={VARIABLE_CHIP_CLASS}>
+                    {"{{" + v + "}}"}
+                  </code>
+                ))}
               </div>
             </div>
-          );
-        })}
+            <button className="btn-ghost text-xs" onClick={() => reset(selectedKind)}>
+              Reset to default
+            </button>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <div>
+              <label className="label">Subject</label>
+              <input
+                className="input"
+                value={current.subject}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    [selectedKind]: { ...current, subject: e.target.value },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <label className="label">Email message</label>
+              <textarea
+                className="input min-h-[260px]"
+                value={emailText}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    [selectedKind]: { ...current, body_html: emailTextToHtml(e.target.value) },
+                  })
+                }
+              />
+              <div className="mt-1 text-xs text-ink-500">
+                Use blank lines for paragraphs, start lines with “-” for bullets, paste full links, and insert variables exactly as shown above.
+              </div>
+            </div>
+            {isDirty && (
+              <div className="text-xs text-warn-500">Unsaved changes in this template</div>
+            )}
+          </div>
+        </div>
       </div>
+
 
       {error && <div className="mt-3 text-sm text-danger-500">{error}</div>}
       {message && <div className="mt-3 text-sm text-ok-500">{message}</div>}
@@ -418,7 +749,7 @@ function CadenceSection() {
                 onChange={(e) => setStartHour(Number(e.target.value))}
               >
                 {Array.from({ length: 24 }, (_, i) => (
-                  <option key={i} value={i}>
+                  <option key={`start-hour-${i}`} value={i}>
                     {i}:00
                   </option>
                 ))}
@@ -432,7 +763,7 @@ function CadenceSection() {
                 onChange={(e) => setEndHour(Number(e.target.value))}
               >
                 {Array.from({ length: 24 }, (_, i) => (
-                  <option key={i + 1} value={i + 1}>
+                  <option key={`end-hour-${i + 1}`} value={i + 1}>
                     {i + 1}:00
                   </option>
                 ))}
@@ -443,11 +774,11 @@ function CadenceSection() {
               <div className="flex flex-wrap gap-2">
                 {labels.map((l, i) => (
                   <button
-                    key={l}
+                    key={`weekday-${i}-${l}`}
                     type="button"
                     className={`btn ${
                       weekdays.includes(i)
-                        ? "bg-ink-900 text-white"
+                        ? "bg-lilac-700 text-white"
                         : "bg-surface-100"
                     }`}
                     onClick={() => toggleDay(i)}

@@ -7,7 +7,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
-from app.models import Company, Employee, Insight, Interview, InterviewSentiment
+from app.models import AdminAlert, Company, Employee, Insight, Interview, InterviewSentiment
 from app.schemas import InterviewOut, InsightOut
 from app.security import get_current_company
 from app.services.retell_service import build_web_call
@@ -147,16 +147,46 @@ def interview_detail(
         ).scalars()
     )
     sent = db.get(InterviewSentiment, iv.id)
+    emp = db.get(Employee, iv.employee_id)
+    alerts = list(
+        db.execute(
+            select(AdminAlert)
+            .where(AdminAlert.company_id == company.id, AdminAlert.interview_id == iv.id)
+            .order_by(desc(AdminAlert.created_at))
+        ).scalars()
+    )
     return {
         "id": iv.id,
         "employee_id": iv.employee_id,
+        "employee": (
+            {
+                "id": emp.id,
+                "name": emp.name,
+                "department": emp.department,
+                "job_title": emp.job_title,
+            }
+            if emp
+            else None
+        ),
         "scheduled_at": iv.scheduled_at,
         "started_at": iv.started_at,
         "ended_at": iv.ended_at,
         "status": iv.status,
         "cleaned_transcript": iv.cleaned_transcript_json,
         "corrected_summary": iv.corrected_summary,
+        "sensitive_omitted": iv.sensitive_omitted or [],
         "insights": [InsightOut.model_validate(i).model_dump() for i in insights],
+        "alerts": [
+            {
+                "id": a.id,
+                "category": a.category,
+                "summary": a.summary,
+                "status": a.status,
+                "created_at": a.created_at,
+                "acknowledged_at": a.acknowledged_at,
+            }
+            for a in alerts
+        ],
         "sentiment": (
             {
                 "morale": sent.morale,

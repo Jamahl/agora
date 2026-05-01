@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.clients.retell_client import client as retell_client
 from app.config import get_settings
-from app.models import Company, Employee, Interview, OKR
+from app.models import Company, CompanyContext, Employee, Interview, OKR
 
 
 def _active_okrs_text(db: Session, company_id: int) -> str:
@@ -22,6 +22,27 @@ def _active_okrs_text(db: Session, company_id: int) -> str:
         for kr in o.key_results:
             lines.append(f"    · KR: {kr.description}")
     return "\n".join(lines) or "(no OKRs yet)"
+
+
+def _leadership_context(db: Session, company_id: int, employee: Employee) -> str:
+    rows = list(
+        db.execute(
+            select(CompanyContext)
+            .where(
+                CompanyContext.company_id == company_id,
+                CompanyContext.is_active.is_(True),
+                or_(
+                    CompanyContext.scope_type == "company",
+                    and_(
+                        CompanyContext.scope_type == "department",
+                        CompanyContext.scope_id == employee.department,
+                    ),
+                ),
+            )
+            .order_by(CompanyContext.created_at.desc())
+        ).scalars()
+    )
+    return "\n\n".join(f"## {row.label}\n{row.content}" for row in rows)
 
 
 def build_dynamic_vars(db: Session, company: Company, employee: Employee, interview: Interview) -> dict:
@@ -45,8 +66,25 @@ def build_dynamic_vars(db: Session, company: Company, employee: Employee, interv
 
         rr = db.get(ResearchRequest, interview.research_request_id)
         if rr:
-            research_block = (
-                f"This is a research-request interview. Leadership asked: {rr.question}"
+            plan = rr.plan_json or {}
+            style = str(plan.get("research_type") or "root_cause").replace("_", " ")
+            goal = plan.get("goal") or "Help leadership understand what to do next."
+            questions = plan.get("sample_questions") or []
+            question_lines = "\n".join(f"- {q}" for q in questions[:5] if q)
+            research_block = "\n".join(
+                part
+                for part in [
+                    "This is a research-request interview.",
+                    f"Leadership asked: {rr.question}",
+                    f"Decision goal: {goal}",
+                    f"Research style: {style}",
+                    (
+                        "Suggested areas to explore:\n" + question_lines
+                        if question_lines
+                        else ""
+                    ),
+                ]
+                if part
             )
 
     return {
@@ -56,6 +94,7 @@ def build_dynamic_vars(db: Session, company: Company, employee: Employee, interv
         "is_first_interview": "true" if is_first else "false",
         "memory_summary": memory_block,
         "active_okrs": _active_okrs_text(db, company.id),
+        "leadership_context": _leadership_context(db, company.id, employee),
         "hr_contact": company.hr_contact or "HR",
         "research_context": research_block,
     }

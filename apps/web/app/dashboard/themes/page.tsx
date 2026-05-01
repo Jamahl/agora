@@ -59,7 +59,7 @@ export default function ThemesPage() {
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-ink-900">{t.label}</div>
                   {t.summary && (
-                    <p className="mt-1 text-sm text-ink-500 line-clamp-2">{t.summary}</p>
+                    <p className="mt-1 text-sm text-ink-500">{t.summary}</p>
                   )}
                 </div>
                 <div className="shrink-0 text-right">

@@ -731,6 +731,21 @@ Re-run `scripts/provision_retell_agent.py` after editing the prompt.
 ### Adding auth / multi-admin
 Today `admin_session` is single-admin by cookie. Replace `get_current_company` dependency in `security.py` with a real user→session mapping, add `user_id` FK on `admin_session`. Start with one user row for the existing cookie to keep compatibility.
 
+### 001 improvements pass — operating context and evidence UX
+This branch added the first connected-intelligence pass from `001-improvements.md`:
+
+- **Chat sessions + explicit context mode** — `chat_session` stores lightweight threads with `context_mode` (`all|page|custom`) and optional scope. New threads stay blank until the first message, then the backend names the thread from that first prompt. `ChatDock` can switch between previous named threads, plus a "Previous conversation" legacy option for pre-session chat messages (`/chat/history?session_id=-1`), and only narrows to the current OKR/department/employee when the user chooses it.
+- **Richer citations** — `services/rag.py` returns `source_label`, `source_category`, `source_url`, and `preview` for insight/Notion citations. The chat UI renders clickable, focusable source pills and distinguishes employee signal from company documents.
+- **Research briefs** — `research_request.plan_json` now carries brief fields (`goal`, `research_type`, `audience_mode`, `selected_employees`, `sample_questions`, `timeline`, `readout_threshold`) while preserving the legacy `employees`/`eta_days` shape for compatibility.
+- **Research style affects interview framing** — when a research-linked interview starts, `retell_service.build_dynamic_vars()` includes the brief's `goal`, `research_type`, and `sample_questions` in `research_context`, so the Retell agent can adapt follow-ups to root-cause, pulse-check, decision-support, idea-discovery, or follow-up work.
+- **OKR scope + KR signal** — `okr.scope_type/scope_id` support company vs department OKRs. `insight_key_result_tag` stores high-confidence KR-level links created during synthesis at a higher threshold than objective-level OKR tags.
+- **Leadership-managed context** — `company_context` blocks are editable from Settings and injected into Retell dynamic vars as `leadership_context` for the next interview call. The prompt references this block and tells the agent to use it for probing, not recite it.
+- **Alert/sensitive flow** — global dashboard alert banners were removed; alerts live in the Alerts nav with an unread sidebar badge. Interview pages now show sensitive handling context, linked alerts, omitted topics, and reviewed/pending status.
+- **Employee leadership summary** — employee detail now returns aggregate stats (`completed_interviews`, `pending_interviews`, `average_sentiment`, `last_sentiment`) and the UI leads with status plus a concise manager-facing overview. Interview history only shows completed interviews with actual signal; scheduled/empty interviews stay in Pending interviews or out of history. The pending-interview card clarifies that `schedule-next` both schedules the cadence slot and sends the invite immediately.
+- **Plain-language email templates** — Settings stores templates as HTML for sending, but admins edit plain email text. The UI converts paragraphs, bullets, and links on save/render, uses cream-highlighted variable chips consistently, and highlights detected `{{variables}}` in subject/body previews so placeholders are easy to spot.
+- **Settings navigation** — Settings uses top anchor pills for Profile, Cadence, Context, Research, Integrations, and Email templates so admins can jump directly to the right configuration area without scanning a long page.
+- **Research style visibility** — Settings includes a Research styles card explaining the five per-brief styles (`root_cause`, `pulse_check`, `decision_support`, `idea_discovery`, `follow_up`) and links admins to create or edit briefs. Styles are not global config; they are stored on each research request and passed into Retell as `research_context` when that round's interviews start.
+
 ### Multi-tenant (multi-company)
 The DB is already company-scoped — every table carries `company_id`. The session layer assumes one company; replace `get_current_company` to resolve from the cookie→user→company chain.
 
@@ -754,4 +769,4 @@ These aren't bugs — they're conscious omissions or things we punted on.
 
 ---
 
-*Last updated: 2026-04-29. Owner: Jamahl McMurran (BetterLabs). If something drifts from the code, the code wins — update this file in the same PR.*
+*Last updated: 2026-05-01. Owner: Jamahl McMurran (BetterLabs). If something drifts from the code, the code wins — update this file in the same PR.*

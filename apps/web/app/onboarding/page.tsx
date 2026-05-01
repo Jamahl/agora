@@ -47,7 +47,7 @@ export default function Onboarding() {
       <div className="mx-auto max-w-4xl px-6 py-8">
         <div className="mb-6 flex gap-1">
           {[0, 1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className={`h-1 flex-1 rounded ${i <= step ? "bg-ink-900" : "bg-surface-200"}`} />
+            <div key={`step-${i}`} className={`h-1 flex-1 rounded ${i <= step ? "bg-lilac-700" : "bg-surface-200"}`} />
           ))}
         </div>
         {step === 0 && <StepWelcome next={() => setStep(1)} />}
@@ -311,10 +311,10 @@ function StepOKRs({ next }: { next: () => void }) {
         <div className="mt-4 border border-accent-400 rounded-md p-4 bg-accent-400/10">
           <div className="font-medium mb-2">Preview — confirm before committing</div>
           {preview.map((o, i) => (
-            <div key={i} className="mb-3">
+            <div key={`preview-okr-${i}-${o.objective}`} className="mb-3">
               <div className="font-medium">{o.objective}</div>
               <ul className="mt-1 ml-4 list-disc text-sm text-ink-500">
-                {o.key_results?.map((k: any, j: number) => (<li key={j}>{k.description}{k.target_metric ? ` — ${k.target_metric}` : ""}</li>))}
+                {o.key_results?.map((k: any, j: number) => (<li key={`preview-kr-${i}-${j}-${k.description}`}>{k.description}{k.target_metric ? ` — ${k.target_metric}` : ""}</li>))}
               </ul>
             </div>
           ))}
@@ -401,13 +401,13 @@ function StepCadence({ next }: { next: () => void }) {
         <div>
           <label className="label">Window start</label>
           <select className="input" value={startHour} onChange={(e) => setStartHour(Number(e.target.value))}>
-            {Array.from({ length: 24 }, (_, i) => (<option key={i} value={i}>{i}:00</option>))}
+            {Array.from({ length: 24 }, (_, i) => (<option key={`start-hour-${i}`} value={i}>{i}:00</option>))}
           </select>
         </div>
         <div>
           <label className="label">Window end</label>
           <select className="input" value={endHour} onChange={(e) => setEndHour(Number(e.target.value))}>
-            {Array.from({ length: 24 }, (_, i) => (<option key={i + 1} value={i + 1}>{i + 1}:00</option>))}
+            {Array.from({ length: 24 }, (_, i) => (<option key={`end-hour-${i + 1}`} value={i + 1}>{i + 1}:00</option>))}
           </select>
         </div>
         <div className="col-span-2">
@@ -415,8 +415,8 @@ function StepCadence({ next }: { next: () => void }) {
           <div className="flex gap-2">
             {labels.map((l, i) => (
               <button
-                key={l}
-                className={`btn ${weekdays.includes(i) ? "bg-ink-900 text-white" : "bg-surface-100"}`}
+                key={`weekday-${i}-${l}`}
+                className={`btn ${weekdays.includes(i) ? "bg-lilac-700 text-white" : "bg-surface-100"}`}
                 onClick={() => setWeekdays(weekdays.includes(i) ? weekdays.filter((d) => d !== i) : [...weekdays, i].sort())}
               >
                 {l}

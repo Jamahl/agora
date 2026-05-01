@@ -8,6 +8,15 @@ import { api } from "@/lib/api";
 type PlanEmployee = { employee_id: number; reason: string };
 type Plan = {
   question?: string;
+  goal?: string;
+  research_type?: string;
+  audience_mode?: string;
+  selected_departments?: string[];
+  recommended_employees?: PlanEmployee[];
+  selected_employees?: PlanEmployee[];
+  sample_questions?: string[];
+  timeline?: string;
+  readout_threshold?: number;
   employees: PlanEmployee[];
   eta_days: number;
   notes?: string;
@@ -63,6 +72,21 @@ function statusLabel(status: string): string {
   return status.replace(/_/g, " ");
 }
 
+function researchStyleHelp(style: string): string {
+  switch (style) {
+    case "pulse_check":
+      return "A broad read on how a group feels right now.";
+    case "decision_support":
+      return "Focused on evidence leadership needs before choosing a direction.";
+    case "idea_discovery":
+      return "Designed to surface suggestions, alternatives, and unexplored options.";
+    case "follow_up":
+      return "Checks whether a known issue has changed since prior signal.";
+    default:
+      return "Drills into why something is happening and what is causing it.";
+  }
+}
+
 export default function ResearchDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -75,6 +99,8 @@ export default function ResearchDetailPage() {
 
   const [editEmployees, setEditEmployees] = useState<PlanEmployee[]>([]);
   const [editEta, setEditEta] = useState<number>(7);
+  const [editGoal, setEditGoal] = useState("");
+  const [editStyle, setEditStyle] = useState("root_cause");
   const [addSelect, setAddSelect] = useState<string>("");
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -88,8 +114,11 @@ export default function ResearchDetailPage() {
       setResearch(r);
       setEmployees(roster || []);
       if (r.plan) {
-        setEditEmployees(r.plan.employees?.map((e) => ({ ...e })) || []);
+        const picked = r.plan.selected_employees || r.plan.employees || [];
+        setEditEmployees(picked.map((e) => ({ ...e })));
         setEditEta(r.plan.eta_days ?? 7);
+        setEditGoal(r.plan.goal || "");
+        setEditStyle(r.plan.research_type || "root_cause");
       }
     } catch (e: any) {
       setError(e.message || "Failed to load research");
@@ -133,12 +162,21 @@ export default function ResearchDetailPage() {
     try {
       const updated = await api<ResearchRequest>(`/research/${research.id}/plan`, {
         method: "PATCH",
-        body: JSON.stringify({ employees: editEmployees, eta_days: editEta }),
+        body: JSON.stringify({
+          selected_employees: editEmployees,
+          employees: editEmployees,
+          eta_days: editEta,
+          goal: editGoal,
+          research_type: editStyle,
+        }),
       });
       setResearch(updated);
       if (updated.plan) {
-        setEditEmployees(updated.plan.employees?.map((e) => ({ ...e })) || []);
+        const picked = updated.plan.selected_employees || updated.plan.employees || [];
+        setEditEmployees(picked.map((e) => ({ ...e })));
         setEditEta(updated.plan.eta_days ?? editEta);
+        setEditGoal(updated.plan.goal || editGoal);
+        setEditStyle(updated.plan.research_type || editStyle);
       }
       return true;
     } catch (e: any) {
@@ -147,21 +185,19 @@ export default function ResearchDetailPage() {
     }
   };
 
-  const approve = async (withEdits: boolean) => {
+  const approve = async () => {
     if (!research) return;
-    setBusy(withEdits ? "approve-edits" : "approve");
+    setBusy("launch");
     setError(null);
     try {
-      if (withEdits) {
-        const ok = await patchPlan();
-        if (!ok) return;
-      }
+      const ok = await patchPlan();
+      if (!ok) return;
       const updated = await api<ResearchRequest>(`/research/${research.id}/approve`, {
         method: "POST",
       });
       setResearch(updated);
     } catch (e: any) {
-      setError(e.message || "Failed to approve");
+      setError(e.message || "Failed to launch research");
     } finally {
       setBusy(null);
     }
@@ -169,7 +205,7 @@ export default function ResearchDetailPage() {
 
   const reject = async () => {
     if (!research) return;
-    if (!confirm("Reject this research request? Interviews won't be scheduled.")) return;
+    if (!confirm("Cancel this research brief? Interviews won't be scheduled.")) return;
     setBusy("reject");
     setError(null);
     try {
@@ -225,7 +261,7 @@ export default function ResearchDetailPage() {
             {research.approved_at && (
               <>
                 {" · "}
-                Approved{" "}
+                Launched{" "}
                 {formatDistanceToNow(new Date(research.approved_at), { addSuffix: true })}
               </>
             )}
@@ -240,18 +276,39 @@ export default function ResearchDetailPage() {
         <div className="card mb-4 border-danger-500 text-sm text-danger-500">{error}</div>
       )}
 
-      {/* Plan section */}
+      {/* Brief section */}
       <div className="card mb-6">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold">Plan</h2>
+          <h2 className="text-lg font-semibold">Research brief</h2>
           {!isDraft && (
-            <div className="text-xs text-ink-500">Read-only — plan is locked.</div>
+            <div className="text-xs text-ink-500">Read-only — brief is launched.</div>
           )}
         </div>
 
         {isDraft ? (
           <>
-            <div className="mt-4">
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <label className="label">What decision should this help you make?</label>
+                <textarea
+                  className="input min-h-[80px]"
+                  value={editGoal}
+                  onChange={(e) => setEditGoal(e.target.value)}
+                  placeholder="What should leadership be able to decide after this?"
+                />
+              </div>
+              <div>
+                <label className="label">Research style</label>
+                <select className="input" value={editStyle} onChange={(e) => setEditStyle(e.target.value)}>
+                  <option value="root_cause">Root cause</option>
+                  <option value="pulse_check">Pulse check</option>
+                  <option value="decision_support">Decision support</option>
+                  <option value="idea_discovery">Idea discovery</option>
+                  <option value="follow_up">Follow-up</option>
+                </select>
+                <div className="mt-1 text-xs text-ink-500">{researchStyleHelp(editStyle)}</div>
+              </div>
+              <div>
               <label className="label">ETA (days)</label>
               <input
                 type="number"
@@ -260,10 +317,11 @@ export default function ResearchDetailPage() {
                 value={editEta}
                 onChange={(e) => setEditEta(Number(e.target.value) || 0)}
               />
+              </div>
             </div>
 
             <div className="mt-6">
-              <div className="label">Interviewees</div>
+              <div className="label">Who we'll talk to</div>
               {editEmployees.length === 0 ? (
                 <div className="rounded-md border border-dashed border-surface-200 p-4 text-sm text-ink-500">
                   No one selected yet. Add people below.
@@ -313,14 +371,19 @@ export default function ResearchDetailPage() {
               )}
             </div>
 
-            {availableToAdd.length > 0 && (
-              <div className="mt-4 flex gap-2">
+            <div className="mt-5 rounded-lg border border-lilac-100 bg-lilac-50 p-4">
+              <div className="font-medium text-ink-900">Add more participants</div>
+              <p className="mt-1 text-sm text-ink-600">
+                Agora suggested the first group. Add anyone else whose context would improve the readout.
+              </p>
+              {availableToAdd.length > 0 ? (
+              <div className="mt-3 flex gap-2">
                 <select
                   className="input max-w-sm"
                   value={addSelect}
                   onChange={(e) => setAddSelect(e.target.value)}
                 >
-                  <option value="">Add interviewee…</option>
+                  <option value="">Add someone to the brief…</option>
                   {availableToAdd.map((e) => (
                     <option key={e.id} value={e.id}>
                       {e.name}
@@ -329,59 +392,70 @@ export default function ResearchDetailPage() {
                   ))}
                 </select>
                 <button className="btn-secondary" disabled={!addSelect} onClick={addRow}>
-                  Add
+                  Add participant
                 </button>
               </div>
-            )}
+              ) : (
+                <div className="mt-3 text-sm text-ink-500">Everyone active is already on this brief.</div>
+              )}
+            </div>
 
             {research.plan?.notes && (
               <div className="mt-6 rounded-md bg-surface-50 p-3 text-sm text-ink-700">
                 <div className="mb-1 text-xs font-medium uppercase text-ink-500">
-                  Notes from Agora
+                  Expected output
                 </div>
                 {research.plan.notes}
               </div>
             )}
 
-            <div className="mt-6 flex flex-wrap gap-2">
-              <button
-                className="btn-primary"
-                disabled={busy !== null || editEmployees.length === 0}
-                onClick={() => approve(false)}
-              >
-                {busy === "approve" ? "Approving…" : "Approve"}
-              </button>
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-2">
               <button
                 className="btn-secondary"
-                disabled={busy !== null || editEmployees.length === 0}
-                onClick={() => approve(true)}
-              >
-                {busy === "approve-edits" ? "Saving & approving…" : "Approve with edits"}
-              </button>
-              <button
-                className="btn-danger ml-auto"
                 disabled={busy !== null}
                 onClick={reject}
               >
-                {busy === "reject" ? "Rejecting…" : "Reject"}
+                {busy === "reject" ? "Cancelling…" : "Cancel"}
+              </button>
+              <button
+                className="btn-primary"
+                disabled={busy !== null || editEmployees.length === 0}
+                onClick={approve}
+              >
+                {busy === "launch" ? "Launching…" : "Launch research"}
               </button>
             </div>
           </>
         ) : (
           <div className="mt-4 space-y-4">
             <div className="text-sm text-ink-700">
-              ETA:{" "}
+              Timeline:{" "}
               <span className="font-medium">
-                {research.plan?.eta_days ?? "—"} days
+                {research.plan?.timeline || `${research.plan?.eta_days ?? "—"} days`}
               </span>
             </div>
+            {research.plan?.goal && (
+              <div>
+                <div className="label">Goal</div>
+                <p className="text-sm text-ink-700">{research.plan.goal}</p>
+              </div>
+            )}
             <div>
-              <div className="label">Interviewees</div>
-              {(research.plan?.employees || []).length === 0 ? (
-                <div className="text-sm text-ink-500">No interviewees on plan.</div>
+              <div className="label">Research style</div>
+              <span className="badge bg-lilac-50 text-lilac-700">
+                {(research.plan?.research_type || "root_cause").replace(/_/g, " ")}
+              </span>
+              <p className="mt-1 text-sm text-ink-500">
+                {researchStyleHelp(research.plan?.research_type || "root_cause")}
+              </p>
+            </div>
+            <div>
+              <div className="label">Who we'll talk to</div>
+              {((research.plan?.selected_employees || research.plan?.employees) || []).length === 0 ? (
+                <div className="text-sm text-ink-500">No one on the brief.</div>
               ) : (
                 <div className="space-y-2">
-                  {research.plan!.employees.map((row, i) => {
+                  {(research.plan!.selected_employees || research.plan!.employees).map((row, i) => {
                     const emp = employeeMap.get(row.employee_id);
                     return (
                       <div
@@ -410,7 +484,7 @@ export default function ResearchDetailPage() {
             {research.plan?.notes && (
               <div className="rounded-md bg-surface-50 p-3 text-sm text-ink-700">
                 <div className="mb-1 text-xs font-medium uppercase text-ink-500">
-                  Notes
+                  Expected output
                 </div>
                 {research.plan.notes}
               </div>
@@ -451,7 +525,7 @@ export default function ResearchDetailPage() {
                   <div className="label">Findings</div>
                   <ul className="list-disc pl-5 text-sm text-ink-700 space-y-1">
                     {report.findings.map((f, i) => (
-                      <li key={i}>{f}</li>
+                      <li key={`finding-${i}-${f.slice(0, 20)}`}>{f}</li>
                     ))}
                   </ul>
                 </div>
@@ -462,7 +536,7 @@ export default function ResearchDetailPage() {
                   <div className="label">Recommendations</div>
                   <ul className="list-disc pl-5 text-sm text-ink-700 space-y-1">
                     {report.recommendations.map((r, i) => (
-                      <li key={i}>{r}</li>
+                      <li key={`recommendation-${i}-${r.slice(0, 20)}`}>{r}</li>
                     ))}
                   </ul>
                 </div>
@@ -474,7 +548,7 @@ export default function ResearchDetailPage() {
                   <div className="space-y-2">
                     {report.supporting_quotes.map((q, i) => (
                       <blockquote
-                        key={i}
+                        key={`quote-${i}-${q.slice(0, 20)}`}
                         className="border-l-2 border-accent-500 pl-3 text-sm italic text-ink-700"
                       >
                         {q}
