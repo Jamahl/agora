@@ -283,7 +283,19 @@ function ContextSection() {
       <p className="mt-1 text-sm text-ink-500">
         Current priorities, announcements, or org changes Agora should use to guide interview follow-ups.
       </p>
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 rounded-lg border border-surface-200 bg-white">
+        <div className="flex items-center justify-between border-b border-surface-100 px-4 py-3">
+          <div>
+            <div className="font-medium text-ink-900">Viewing existing context</div>
+            <div className="mt-0.5 text-xs text-ink-500">
+              Edit, pause, or delete the context Agora currently uses in future interviews.
+            </div>
+          </div>
+          <span className="badge bg-lilac-50 text-lilac-700">
+            {blocks.filter((block) => block.is_active).length} active
+          </span>
+        </div>
+      <div className="space-y-3 p-3">
         {blocks.length === 0 ? (
           <div className="rounded-lg border border-dashed border-lilac-200 bg-lilac-50 p-4 text-sm text-ink-600">
             No context blocks yet. Add one for Q2 priorities, a reorg, or cultural values.
@@ -305,7 +317,7 @@ function ContextSection() {
                   <p className="mt-2 text-sm text-ink-700">{block.content}</p>
                 </div>
                 <div className="flex shrink-0 gap-2">
-                  <button className="btn-ghost text-xs" onClick={() => setEditing({ ...block, scope_id: block.scope_id || "" })}>Edit</button>
+                  <button className="btn-ghost text-xs" onClick={() => setEditing({ ...block, scope_id: block.scope_id || "" })}>Change</button>
                   <button className="btn-secondary text-xs" onClick={() => toggle(block)}>{block.is_active ? "Pause" : "Activate"}</button>
                   <button className="btn-danger text-xs" onClick={() => remove(block)}>Delete</button>
                 </div>
@@ -313,6 +325,7 @@ function ContextSection() {
             </div>
           ))
         )}
+      </div>
       </div>
       <div className="mt-5 rounded-lg border border-lilac-100 bg-lilac-50 p-4">
         <div className="mb-3 font-medium">{editing.id ? "Edit context block" : "Add context block"}</div>

@@ -27,6 +27,7 @@ export default function EmployeesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
   const [importing, setImporting] = useState(false);
+  const [startingInterviewId, setStartingInterviewId] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -76,6 +77,25 @@ export default function EmployeesPage() {
       load();
     } finally {
       setImporting(false);
+    }
+  };
+
+  const isDemoEmployee = (emp: Employee) =>
+    emp.name.toLowerCase().includes("jamahl") || emp.email.toLowerCase().includes("jamahl");
+
+  const startInterview = async (emp: Employee) => {
+    setStartingInterviewId(emp.id);
+    try {
+      const r = await api<{ link: string; link_token: string }>(
+        `/employees/${emp.id}/start-test-interview`,
+        { method: "POST" }
+      );
+      window.open(r.link, "_blank", "noopener,noreferrer");
+    } catch (e: any) {
+      alert(e?.message || "Failed to start interview");
+    } finally {
+      setStartingInterviewId(null);
+      load();
     }
   };
 
@@ -155,16 +175,27 @@ export default function EmployeesPage() {
                       {r.status}
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-right">
-                    <Link className="mr-1 rounded-md bg-lilac-50 px-3 py-1.5 text-sm font-medium text-lilac-700 ring-1 ring-lilac-100 hover:bg-lilac-100" href={`/dashboard/employees/${r.id}`}>
+                  <td className="px-5 py-3">
+                    <div className="flex justify-end gap-1.5">
+                    <Link className="rounded-md bg-lilac-50 px-2.5 py-1 text-xs font-medium text-lilac-700 ring-1 ring-lilac-100 hover:bg-lilac-100" href={`/dashboard/employees/${r.id}`}>
                       View
                     </Link>
-                    <button className="btn-ghost" onClick={() => openEdit(r)}>Edit</button>
-                    {r.status === "active" ? (
-                      <button className="btn-ghost text-danger-500" onClick={() => archive(r.id)}>Archive</button>
-                    ) : (
-                      <button className="btn-ghost" onClick={() => restore(r.id)}>Restore</button>
+                    {isDemoEmployee(r) && (
+                      <button
+                        className="rounded-md bg-accent-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-700 disabled:opacity-50"
+                        onClick={() => startInterview(r)}
+                        disabled={startingInterviewId === r.id}
+                      >
+                        {startingInterviewId === r.id ? "Starting…" : "Start"}
+                      </button>
                     )}
+                    <button className="rounded-md px-2.5 py-1 text-xs font-medium text-ink-500 hover:bg-surface-50" onClick={() => openEdit(r)}>Edit</button>
+                    {r.status === "active" ? (
+                      <button className="rounded-md px-2.5 py-1 text-xs font-medium text-danger-500 hover:bg-danger-500/5" onClick={() => archive(r.id)}>Archive</button>
+                    ) : (
+                      <button className="rounded-md px-2.5 py-1 text-xs font-medium text-ink-500 hover:bg-surface-50" onClick={() => restore(r.id)}>Restore</button>
+                    )}
+                    </div>
                   </td>
                 </tr>
               ))}

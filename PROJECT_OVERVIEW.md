@@ -28,6 +28,38 @@ A voice-AI company intelligence tool. An admin (CEO / department head) onboards 
 
 Full product rationale lives in [`AGORA_PRD.md`](./AGORA_PRD.md). This document assumes you've read at least §1–§4 of that.
 
+## Critical demo/run checklist — Retell webhooks
+
+**Do this before every local demo or live interview.** Retell must be able to call the local API after a voice interview ends. If the webhook URL is stale, calls complete in Retell but stay `in_progress` in Agora, so dashboards, Review, Alerts, sentiment, and insights do not update.
+
+Quick check:
+
+```bash
+# 1) Is the local API up?
+curl http://localhost:8010/health
+
+# 2) Is the public tunnel up? Replace with the current tunnel URL.
+curl https://<current-tunnel>.trycloudflare.com/health
+
+# 3) Does Retell point at that same tunnel?
+docker compose exec api python -c "from retell import Retell; from app.config import get_settings; rc=Retell(api_key=get_settings().retell_api_key); a=rc.agent.retrieve(get_settings().retell_agent_id); print(a.webhook_url, a.webhook_events)"
+```
+
+If the tunnel is missing/dead:
+
+```bash
+cloudflared tunnel --url http://localhost:8010 --protocol http2
+# copy the printed https://*.trycloudflare.com URL, then:
+docker compose exec api python -c "from retell import Retell; from app.config import get_settings; rc=Retell(api_key=get_settings().retell_api_key); rc.agent.update(get_settings().retell_agent_id, webhook_url='https://<current-tunnel>.trycloudflare.com/webhooks/retell', webhook_events=['call_started','call_ended','call_analyzed'])"
+```
+
+**Recommended permanent fix:** stop relying on quick `trycloudflare.com` tunnels for demos. Use either:
+
+1. a **Cloudflare named tunnel** with a stable hostname, or
+2. a hosted API URL for the demo environment.
+
+Quick tunnels are random and ephemeral by design; they will break again whenever the process dies or a new tunnel is started. The backend has a 5-minute Retell polling recovery job as a safety net, but a stable webhook URL is the real fix.
+
 ---
 
 ## Architecture
@@ -568,9 +600,13 @@ The cookie name is `agora_admin`. The secret is `ADMIN_COOKIE_SECRET` in `.env`.
 
 1. **`docker compose restart` does not re-read `.env`.** Use `up -d --force-recreate <service>`.
 2. **Cloudflare quick tunnels default to QUIC (UDP 443).** Many networks block it — output hangs with `failed to dial to edge with quic`. Add `--protocol http2`.
-3. **Cloudflare `trycloudflare.com` tunnel URLs are ephemeral.** Every `cloudflared tunnel` run gets a new random subdomain. If Docker is stopped and restarted the tunnel URL changes — Retell will be posting webhooks to the old dead URL. After restarting Docker: re-run the tunnel, update `RETELL_WEBHOOK_BASE_URL` in `.env`, force-recreate the api container. Any interview stuck as `in_progress` because of a missed webhook has two recovery paths:
-   - **Script (preferred):** `docker compose exec api python /scripts/recover_interview.py <interview_id>` — pulls the call from Retell API and runs synthesis in-process.
-   - **Webhook replay:** `curl -s https://api.retellai.com/v2/get-call/<call_id> -H "Authorization: Bearer $RETELL_API_KEY" > /tmp/call.json` then POST `{"event":"call_analyzed","call":<contents of call.json>}` to `http://localhost:8010/webhooks/retell`. Useful when you can't exec into the container.
+3. **Cloudflare `trycloudflare.com` tunnel URLs are ephemeral.** Every `cloudflared tunnel` run gets a new random subdomain. If Docker is stopped and restarted the tunnel URL changes — Retell will be posting webhooks to the old dead URL.
+   - **Before any demo/interview:** run `cloudflared tunnel --url http://localhost:8010 --protocol http2`, verify `curl <tunnel>/health` returns `200`, and update the Retell agent `webhook_url` to `<tunnel>/webhooks/retell`.
+   - **Check current Retell webhook:** `docker compose exec api python -c "from retell import Retell; from app.config import get_settings; rc=Retell(api_key=get_settings().retell_api_key); a=rc.agent.retrieve(get_settings().retell_agent_id); print(a.webhook_url, a.webhook_events)"`.
+   - **Update Retell webhook:** `docker compose exec api python -c "from retell import Retell; from app.config import get_settings; rc=Retell(api_key=get_settings().retell_api_key); rc.agent.update(get_settings().retell_agent_id, webhook_url='<tunnel>/webhooks/retell', webhook_events=['call_started','call_ended','call_analyzed'])"`.
+   - **Safety net:** `recover_ended_retell_calls_job` runs every 5 min and recovers stuck `in_progress` calls from Retell if the transcript is available.
+   - **Manual recovery:** `docker compose exec api python /scripts/recover_interview.py <interview_id>` pulls the call from Retell API and runs synthesis in-process. Note: normal synthesis sends the post-call summary email; for demo-only recovery, monkeypatch `summary_email.send_post_call_summary` to skip email before calling `run_synthesis`.
+   - **Why Review/Alerts won't catch this:** Review/Alerts depend on synthesis output. If a webhook is missed, the interview remains `in_progress` with no transcript, no insights, no sentiment, and no alert rows — so there is nothing for Review/Alerts to show yet.
 4. **`insight.severity` is an integer (1–4), not a string.** The DB column is `INTEGER DEFAULT 3`. Any frontend code rendering severity must map it to a label (`1=low 2=medium 3=high 4=critical`) before string operations — calling `.toLowerCase()` or `.replace()` directly on the raw value throws a TypeError and crashes the component.
 5. **Immediate no-show rescheduling causes invite spam.** The `reminder_and_noshow_job` must NOT call `schedule_for_employee()` directly — it runs every 5 min, so each no-show detection would fire a new invite. Let `daily_cadence_job` (3am) handle rescheduling; employees get at most one fresh invite per day.
 6. **LOOPS_API_KEY is needed for email fallback.** Without it (and without a Gmail connection), `send_invite` and `send_reminder` will return `{skipped: true, reason: "no_loops_api_key"}` — no crash, but no email delivered. Set `LOOPS_API_KEY` in `.env` or connect Gmail via Settings → Integrations.
@@ -745,6 +781,7 @@ This branch added the first connected-intelligence pass from `001-improvements.m
 - **Plain-language email templates** — Settings stores templates as HTML for sending, but admins edit plain email text. The UI converts paragraphs, bullets, and links on save/render, uses cream-highlighted variable chips consistently, and highlights detected `{{variables}}` in subject/body previews so placeholders are easy to spot.
 - **Settings navigation** — Settings uses top anchor pills for Profile, Cadence, Context, Research, Integrations, and Email templates so admins can jump directly to the right configuration area without scanning a long page.
 - **Research style visibility** — Settings includes a Research styles card explaining the five per-brief styles (`root_cause`, `pulse_check`, `decision_support`, `idea_discovery`, `follow_up`) and links admins to create or edit briefs. Styles are not global config; they are stored on each research request and passed into Retell as `research_context` when that round's interviews start.
+- **Retell webhook recovery safety net** — `recover_ended_retell_calls_job` runs every 5 minutes. If a call is stuck `in_progress` because the local tunnel missed Retell's end webhook, it retrieves the Retell call, marks the interview completed, saves transcript/recording URLs, and runs synthesis once a transcript is available. This prevents demo/local tunnel misses from hiding completed interviews forever.
 
 ### Multi-tenant (multi-company)
 The DB is already company-scoped — every table carries `company_id`. The session layer assumes one company; replace `get_current_company` to resolve from the cookie→user→company chain.
@@ -755,6 +792,7 @@ The DB is already company-scoped — every table carries `company_id`. The sessi
 
 These aren't bugs — they're conscious omissions or things we punted on.
 
+- **Next priority before the next demo: replace quick Cloudflare tunnel with a stable webhook URL.** Set up either a Cloudflare named tunnel with a fixed hostname or deploy the API to a stable demo environment, then update Retell's `webhook_url` permanently. Quick `trycloudflare.com` tunnels are random/ephemeral and will break again if used for demos.
 - **Retell webhook signature verification is disabled by default** (`VERIFY_RETELL_WEBHOOK=false`). Acceptable for local pilot over a cloudflared tunnel where only Retell knows the URL. Must be flipped on before any hosted deploy.
 - **HDBSCAN theme clustering needs ≥5 insights in a 30-day window** to produce anything. First two weeks of a pilot won't have themes. UI shows a friendly empty state.
 - **Research request `status` skips the `running` state** the PRD defines — we use `approved` throughout the run and go straight to `complete` when all interviews land. Add `running` if admins need a distinction between "approved, nothing yet" and "in flight".

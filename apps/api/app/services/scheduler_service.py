@@ -220,6 +220,54 @@ def reminder_and_noshow_job() -> None:
             iv.reminder_sent_at = now
         db.commit()
 
+
+def recover_ended_retell_calls_job() -> None:
+    from app.db import SessionLocal
+    from app.services.synthesis import run_synthesis
+    from retell import Retell
+
+    with SessionLocal() as db:
+        now = datetime.now(timezone.utc)
+        stale = list(
+            db.execute(
+                select(Interview)
+                .where(
+                    Interview.status == "in_progress",
+                    Interview.retell_call_id.is_not(None),
+                    Interview.started_at < now - timedelta(minutes=3),
+                )
+                .order_by(Interview.started_at)
+                .limit(10)
+            ).scalars()
+        )
+        if not stale:
+            return
+        rc = Retell(api_key=get_settings().retell_api_key)
+        for iv in stale:
+            try:
+                call = rc.call.retrieve(iv.retell_call_id)
+                if getattr(call, "call_status", None) != "ended":
+                    continue
+                if not getattr(call, "transcript", None):
+                    continue
+                iv.ended_at = datetime.now(timezone.utc)
+                iv.status = "completed"
+                iv.raw_transcript_json = {
+                    "event": "poll_recovery",
+                    "call": call.model_dump() if hasattr(call, "model_dump") else dict(call),
+                }
+                iv.transcript_url = getattr(call, "transcript_url", None) or getattr(
+                    call, "public_log_url", None
+                )
+                iv.recording_url = getattr(call, "recording_url", None) or getattr(
+                    call, "public_recording_url", None
+                )
+                db.commit()
+                log.info("retell_poll_recovered", interview_id=iv.id, call_id=iv.retell_call_id)
+                run_synthesis(db, iv.id)
+            except Exception as e:
+                log.warning("retell_poll_recovery_failed", interview_id=iv.id, error=str(e))
+
         missed = list(
             db.execute(
                 select(Interview).where(

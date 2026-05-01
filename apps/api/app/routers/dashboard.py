@@ -246,6 +246,25 @@ def department_detail(
             )
         ).scalars()
     )
+    employee_scores = {}
+    team_scores: list[float] = []
+    for emp in employees:
+        scores = list(
+            db.execute(
+                select(InterviewSentiment)
+                .join(Interview, Interview.id == InterviewSentiment.interview_id)
+                .where(Interview.employee_id == emp.id, Interview.status == "completed")
+            ).scalars()
+        )
+        if not scores:
+            employee_scores[emp.id] = None
+            continue
+        score = round(
+            sum((s.morale + s.energy + s.candor + s.urgency) / 4 for s in scores) / len(scores),
+            1,
+        )
+        employee_scores[emp.id] = score
+        team_scores.append(score)
     upcoming = list(
         db.execute(
             select(Interview, Employee)
@@ -261,7 +280,16 @@ def department_detail(
     )
     return {
         "name": name,
-        "employees": [{"id": e.id, "name": e.name, "job_title": e.job_title} for e in employees],
+        "average_score": round(sum(team_scores) / len(team_scores), 1) if team_scores else None,
+        "employees": [
+            {
+                "id": e.id,
+                "name": e.name,
+                "job_title": e.job_title,
+                "average_score": employee_scores.get(e.id),
+            }
+            for e in employees
+        ],
         "upcoming": [
             {
                 "id": iv.id,

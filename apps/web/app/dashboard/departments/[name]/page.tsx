@@ -10,6 +10,7 @@ type DepartmentEmployee = {
   id: number;
   name: string;
   job_title: string | null;
+  average_score?: number | null;
 };
 
 type UpcomingInterview = {
@@ -21,6 +22,7 @@ type UpcomingInterview = {
 
 type DepartmentDetail = {
   name: string;
+  average_score?: number | null;
   employees: DepartmentEmployee[];
   upcoming: UpcomingInterview[];
 };
@@ -108,7 +110,14 @@ export default function DepartmentDetailPage() {
       <Link href="/dashboard/departments" className="text-sm text-accent-500 hover:underline">
         ← Departments
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold">{detail.name}</h1>
+      <h1 className="mt-4 flex items-center gap-2 text-2xl font-semibold">
+        {detail.name}
+        {detail.average_score != null && (
+          <span className="rounded-full bg-lilac-50 px-2 py-1 text-xs font-medium text-lilac-700 ring-1 ring-lilac-100">
+            team avg {detail.average_score.toFixed(1)}/5
+          </span>
+        )}
+      </h1>
       <p className="mt-1 text-sm text-ink-500">
         {detail.employees.length} {detail.employees.length === 1 ? "employee" : "employees"}
       </p>
@@ -196,16 +205,34 @@ export default function DepartmentDetailPage() {
           {detail.employees.length === 0 ? (
             <div className="mt-3 text-sm text-ink-500">No employees assigned to this department.</div>
           ) : (
-            <ul className="mt-3 space-y-2">
+            <div className="mt-3 overflow-hidden rounded-lg border border-surface-200">
+              <div className="grid grid-cols-[1fr_90px_1fr] bg-surface-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-ink-500">
+                <div>Name</div>
+                <div className="text-center">Avg score</div>
+                <div className="text-right">Role</div>
+              </div>
+            <ul className="divide-y divide-surface-100">
               {detail.employees.map((e) => (
-                <li key={e.id} className="flex items-center justify-between text-sm">
-                  <Link href={`/dashboard/employees/${e.id}`} className="font-medium hover:text-accent-500">
-                    {e.name}
-                  </Link>
-                  <span className="text-xs text-ink-500">{e.job_title || "—"}</span>
+                <li key={e.id} className="grid grid-cols-[1fr_90px_1fr] items-center px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <Link href={`/dashboard/employees/${e.id}`} className="font-medium hover:text-accent-500">
+                      {e.name}
+                    </Link>
+                  </div>
+                  <div className="text-center">
+                    {e.average_score != null ? (
+                      <span className="rounded-full bg-lilac-50 px-2 py-0.5 text-xs font-medium text-lilac-700 ring-1 ring-lilac-100">
+                        {e.average_score.toFixed(1)}/5
+                      </span>
+                    ) : (
+                      <span className="text-xs text-ink-300">—</span>
+                    )}
+                  </div>
+                  <span className="truncate text-right text-xs text-ink-500">{e.job_title || "—"}</span>
                 </li>
               ))}
             </ul>
+            </div>
           )}
         </div>
       </div>

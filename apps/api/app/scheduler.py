@@ -36,6 +36,12 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
     sch.add_job(
+        "app.services.scheduler_service:recover_ended_retell_calls_job",
+        trigger=CronTrigger(minute="*/5"),
+        id="recover_ended_retell_calls",
+        replace_existing=True,
+    )
+    sch.add_job(
         "app.services.themes:cluster_themes_job",
         trigger=CronTrigger(hour=2, minute=0),
         id="theme_cluster",
